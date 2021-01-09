@@ -21,6 +21,7 @@ set(src
   flb_input_chunk.c
   flb_filter.c
   flb_output.c
+  flb_output_thread.c
   flb_config.c
   flb_config_map.c
   flb_socket.c
@@ -39,7 +40,7 @@ set(src
   flb_upstream_node.c
   flb_router.c
   flb_worker.c
-  flb_thread.c
+  flb_coro.c
   flb_time.c
   flb_sosreport.c
   flb_sha512.c
@@ -50,13 +51,15 @@ set(src
   flb_callback.c
   flb_strptime.c
   flb_fstore.c
+  flb_thread_pool.c
   )
 
-if (CMAKE_SYSTEM_NAME MATCHES "Windows")
-set(src
-  ${src}
-  flb_dlfcn_win32.c
-  )
+if(FLB_SYSTEM_WINDOWS)
+  set(src
+    ${src}
+    flb_dlfcn_win32.c
+    )
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W2")
 endif()
 
 if(FLB_PARSER)

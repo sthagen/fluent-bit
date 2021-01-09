@@ -52,6 +52,27 @@
 #include <fluent-bit/stream_processor/flb_sp.h>
 #endif
 
+FLB_TLS_DEFINE(struct mk_event_loop, flb_engine_evl);
+
+
+void flb_engine_evl_init()
+{
+    FLB_TLS_INIT(flb_engine_evl);
+}
+
+struct mk_event_loop *flb_engine_evl_get()
+{
+    struct mk_event_loop *evl;
+
+    evl = FLB_TLS_GET(flb_engine_evl);
+    return evl;
+}
+
+void flb_engine_evl_set(struct mk_event_loop *evl)
+{
+    FLB_TLS_SET(flb_engine_evl, evl);
+}
+
 int flb_engine_destroy_tasks(struct mk_list *tasks)
 {
     int c = 0;
@@ -94,7 +115,7 @@ static void cb_engine_sched_timer(struct flb_config *ctx, void *data)
     (void) data;
 
     /* Upstream connections timeouts handling */
-    flb_upstream_conn_timeouts(ctx);
+    flb_upstream_conn_timeouts(&ctx->upstreams);
 }
 
 static inline int handle_output_event(flb_pipefd_t fd, struct flb_config *config)
@@ -102,7 +123,7 @@ static inline int handle_output_event(flb_pipefd_t fd, struct flb_config *config
     int ret;
     int bytes;
     int task_id;
-    int thread_id;
+    int out_id;
     int retries;
     int retry_seconds;
     uint32_t type;
@@ -110,7 +131,6 @@ static inline int handle_output_event(flb_pipefd_t fd, struct flb_config *config
     uint64_t val;
     struct flb_task *task;
     struct flb_task_retry *retry;
-    struct flb_output_thread *out_th;
     struct flb_output_instance *ins;
 
     bytes = flb_pipe_r(fd, &val, sizeof(val));
@@ -131,11 +151,11 @@ static inline int handle_output_event(flb_pipefd_t fd, struct flb_config *config
 
     /*
      * The notion of ENGINE_TASK is associated to outputs. All thread
-     * references below belongs to flb_output_thread's.
+     * references below belongs to flb_output_coro's.
      */
-    ret       = FLB_TASK_RET(key);
-    task_id   = FLB_TASK_ID(key);
-    thread_id = FLB_TASK_TH(key);
+    ret     = FLB_TASK_RET(key);
+    task_id = FLB_TASK_ID(key);
+    out_id  = FLB_TASK_OUT(key);
 
 #ifdef FLB_HAVE_TRACE
     char *trace_st = NULL;
@@ -150,46 +170,50 @@ static inline int handle_output_event(flb_pipefd_t fd, struct flb_config *config
         trace_st = "RETRY";
     }
 
-    flb_trace("%s[engine] [task event]%s task_id=%i thread_id=%i return=%s",
+    flb_trace("%s[engine] [task event]%s task_id=%i out_id=%i return=%s",
               ANSI_YELLOW, ANSI_RESET,
-              task_id, thread_id, trace_st);
+              task_id, out_id, trace_st);
 #endif
 
-    task   = config->tasks_map[task_id].task;
-    out_th = flb_output_thread_get(thread_id, task);
-    ins    = out_th->o_ins;
+    task = config->tasks_map[task_id].task;
+    ins  = flb_output_get_instance(config, out_id);
 
     /* A thread has finished, delete it */
     if (ret == FLB_OK) {
+
+        /* Update metrics */
+#ifdef FLB_HAVE_METRICS
+        if (ins->metrics) {
+            flb_metrics_sum(FLB_METRIC_OUT_OK_RECORDS, task->records, ins->metrics);
+            flb_metrics_sum(FLB_METRIC_OUT_OK_BYTES, task->size, ins->metrics);
+        }
+#endif
         /* Inform the user if a 'retry' succedeed */
         if (mk_list_size(&task->retries) > 0) {
-            retries = flb_task_retry_count(task, out_th->parent);
+            retries = flb_task_retry_count(task, ins);
             if (retries > 0) {
                 flb_info("[engine] flush chunk '%s' succeeded at retry %i: "
-                         "task_id=%i, input=%s > output=%s",
+                         "task_id=%i, input=%s > output=%s (out_id=%i)",
                          flb_input_chunk_get_name(task->ic),
-                         retries, out_th->id,
+                         retries, task_id,
                          flb_input_name(task->i_ins),
-                         flb_output_name(ins));
+                         flb_output_name(ins), out_id);
             }
         }
         else if (flb_task_from_fs_storage(task) == FLB_TRUE) {
             flb_info("[engine] flush backlog chunk '%s' succeeded: "
-                     "task_id=%i, input=%s > output=%s",
+                     "task_id=%i, input=%s > output=%s (out_id=%i)",
                      flb_input_chunk_get_name(task->ic),
-                     out_th->id,
+                     task_id,
                      flb_input_name(task->i_ins),
-                     flb_output_name(ins));
+                     flb_output_name(ins), out_id);
         }
-        flb_task_retry_clean(task, out_th->parent);
-        flb_output_thread_destroy_id(thread_id, task);
-        if (task->users == 0 && mk_list_size(&task->retries) == 0) {
-            flb_task_destroy(task, FLB_TRUE);
-        }
+        flb_task_retry_clean(task, ins);
+        flb_task_users_dec(task, FLB_TRUE);
     }
     else if (ret == FLB_RETRY) {
         /* Create a Task-Retry */
-        retry = flb_task_retry_create(task, out_th);
+        retry = flb_task_retry_create(task, ins);
         if (!retry) {
             /*
              * It can fail in two situations:
@@ -198,8 +222,7 @@ static inline int handle_output_event(flb_pipefd_t fd, struct flb_config *config
              * - It reached the maximum number of re-tries
              */
 #ifdef FLB_HAVE_METRICS
-            flb_metrics_sum(FLB_METRIC_OUT_RETRY_FAILED, 1,
-                            out_th->o_ins->metrics);
+            flb_metrics_sum(FLB_METRIC_OUT_RETRY_FAILED, 1, ins->metrics);
 #endif
             /* Notify about this failed retry */
             flb_warn("[engine] chunk '%s' cannot be retried: "
@@ -209,20 +232,16 @@ static inline int handle_output_event(flb_pipefd_t fd, struct flb_config *config
                      flb_input_name(task->i_ins),
                      flb_output_name(ins));
 
-            flb_output_thread_destroy_id(thread_id, task);
-            if (task->users == 0 && mk_list_size(&task->retries) == 0) {
-                flb_task_destroy(task, FLB_TRUE);
-            }
-
+            flb_task_users_dec(task, FLB_TRUE);
             return 0;
         }
 
 #ifdef FLB_HAVE_METRICS
-        flb_metrics_sum(FLB_METRIC_OUT_RETRY, 1, out_th->o_ins->metrics);
+        flb_metrics_sum(FLB_METRIC_OUT_RETRY, 1, ins->metrics);
 #endif
 
-        /* Always destroy the old thread */
-        flb_output_thread_destroy_id(thread_id, task);
+        /* Always destroy the old coroutine */
+        flb_task_users_dec(task, FLB_FALSE);
 
         /* Let the scheduler to retry the failed task/thread */
         retry_seconds = flb_sched_request_create(config,
@@ -241,26 +260,24 @@ static inline int handle_output_event(flb_pipefd_t fd, struct flb_config *config
                      flb_output_name(ins));
 
             flb_task_retry_destroy(retry);
-            if (task->users == 0 && mk_list_size(&task->retries) == 0) {
-                flb_task_destroy(task, FLB_TRUE);
-            }
+            flb_task_users_release(task);
         }
         else {
             /* Inform the user 'retry' has been scheduled */
             flb_warn("[engine] failed to flush chunk '%s', retry in %i seconds: "
-                     "task_id=%i, input=%s > output=%s",
+                     "task_id=%i, input=%s > output=%s (out_id=%i)",
                      flb_input_chunk_get_name(task->ic),
                      retry_seconds,
                      task->id,
                      flb_input_name(task->i_ins),
-                     flb_output_name(ins));
+                     flb_output_name(ins), out_id);
         }
     }
     else if (ret == FLB_ERROR) {
-        flb_output_thread_destroy_id(thread_id, task);
-        if (task->users == 0 && mk_list_size(&task->retries) == 0) {
-            flb_task_destroy(task, FLB_TRUE);
-        }
+#ifdef FLB_HAVE_METRICS
+        flb_metrics_sum(FLB_METRIC_OUT_ERROR, 1, ins->metrics);
+#endif
+        flb_task_users_dec(task, FLB_TRUE);
     }
 
     return 0;
@@ -294,7 +311,7 @@ static inline int flb_engine_manager(flb_pipefd_t fd, struct flb_config *config)
     }
     else if (type == FLB_ENGINE_IN_THREAD) {
         /* Event coming from an input thread */
-        flb_input_thread_destroy_id(key, config);
+        flb_input_coro_destroy_id(key, config);
     }
 
     return 0;
@@ -409,7 +426,7 @@ static int flb_engine_log_start(struct flb_config *config)
         type = FLB_LOG_STDERR;
     }
 
-    if (flb_log_init(config, type, level, config->log_file) == NULL) {
+    if (flb_log_create(config, type, level, config->log_file) == NULL) {
         return -1;
     }
 
@@ -423,6 +440,7 @@ int flb_engine_start(struct flb_config *config)
     struct flb_time t_flush;
     struct mk_event *event;
     struct mk_event_loop *evl;
+    struct flb_sched *sched;
 
     /* HTTP Server */
 #ifdef FLB_HAVE_HTTP
@@ -437,6 +455,10 @@ int flb_engine_start(struct flb_config *config)
         return -1;
     }
     config->evl = evl;
+
+    /* Register the event loop on this thread */
+    flb_engine_evl_init();
+    flb_engine_evl_set(evl);
 
     /* Start the Logging service */
     ret = flb_engine_log_start(config);
@@ -511,11 +533,16 @@ int flb_engine_start(struct flb_config *config)
     }
 
     /* Initialize the scheduler */
-    ret = flb_sched_init(config);
-    if (ret == -1) {
+    sched = flb_sched_create(config, config->evl);
+    if (!sched) {
         flb_error("[engine] scheduler could not start");
         return -1;
     }
+    config->sched = sched;
+
+    /* Register the scheduler context */
+    flb_sched_ctx_init();
+    flb_sched_ctx_set(sched);
 
 #ifdef FLB_HAVE_METRICS
     if (config->storage_metrics == FLB_TRUE) {
@@ -565,7 +592,7 @@ int flb_engine_start(struct flb_config *config)
      * Sched a permanent callback triggered every 1.5 second to let other
      * Fluent Bit components run tasks at that interval.
      */
-    ret = flb_sched_timer_cb_create(config,
+    ret = flb_sched_timer_cb_create(config->sched,
                                     FLB_SCHED_TIMER_CB_PERM,
                                     1500, cb_engine_sched_timer, config);
     if (ret == -1) {
@@ -633,17 +660,17 @@ int flb_engine_start(struct flb_config *config)
             }
             else if (event->type == FLB_ENGINE_EV_THREAD) {
                 struct flb_upstream_conn *u_conn;
-                struct flb_thread *th;
+                struct flb_coro *co;
 
                 /*
                  * Check if we have some co-routine associated to this event,
                  * if so, resume the co-routine
                  */
                 u_conn = (struct flb_upstream_conn *) event;
-                th = u_conn->thread;
-                if (th) {
-                    flb_trace("[engine] resuming thread=%p", th);
-                    flb_thread_resume(th);
+                co = u_conn->coro;
+                if (co) {
+                    flb_trace("[engine] resuming coroutine=%p", co);
+                    flb_coro_resume(co);
                 }
             }
             else if (event->type == FLB_ENGINE_EV_OUTPUT) {
@@ -658,7 +685,7 @@ int flb_engine_start(struct flb_config *config)
         /* Cleanup functions associated to events and timers */
         if (config->is_running == FLB_TRUE) {
             flb_sched_timer_cleanup(config->sched);
-            flb_upstream_conn_pending_destroy(config);
+            flb_upstream_conn_pending_destroy_list(&config->upstreams);
         }
     }
 }
