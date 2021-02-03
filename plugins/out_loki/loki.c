@@ -128,6 +128,7 @@ int flb_loki_kv_append(struct flb_loki *ctx, char *key, char *val)
         flb_plg_error(ctx->ins,
                       "key name for record accessor cannot start with a number: %s",
                       key);
+        flb_free(kv);
         return -1;
     }
 
@@ -567,6 +568,7 @@ static struct flb_loki *loki_config_create(struct flb_output_instance *ins,
         return NULL;
     }
     ctx->u = upstream;
+    flb_output_upstream_set(ctx->u, ins);
     ctx->tcp_port = ins->host.port;
     ctx->tcp_host = ins->host.name;
 
@@ -829,7 +831,7 @@ static flb_sds_t loki_compose_payload(struct flb_loki *ctx,
          msgpack_pack_str_body(&mp_pck, "stream", 6);
 
          /* Pack stream labels */
-         pack_labels(ctx, &mp_sbuf, &mp_pck, tag, tag_len, obj);
+         pack_labels(ctx, &mp_sbuf, &mp_pck, tag, tag_len, NULL);
 
         /* streams['values'] */
          msgpack_pack_str(&mp_pck, 6);

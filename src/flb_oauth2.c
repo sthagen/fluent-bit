@@ -25,8 +25,7 @@
 #include <fluent-bit/flb_oauth2.h>
 #include <fluent-bit/flb_upstream.h>
 #include <fluent-bit/flb_http_client.h>
-
-#include <jsmn/jsmn.h>
+#include <fluent-bit/flb_jsmn.h>
 
 #define free_temporary_buffers()                 \
     if (prot) {                                 \
@@ -238,6 +237,21 @@ struct flb_oauth2 *flb_oauth2_create(struct flb_config *config,
     flb_oauth2_destroy(ctx);
 
     return NULL;
+}
+
+/* Clear the current payload and token */
+void flb_oauth2_payload_clear(struct flb_oauth2 *ctx)
+{
+    ctx->payload[0] = '\0';
+    ctx->expires_in = 0;
+    if (ctx->access_token){
+        flb_sds_destroy(ctx->access_token);
+        ctx->access_token = NULL;
+    }
+    if (ctx->token_type){
+        flb_sds_destroy(ctx->token_type);
+        ctx->token_type = NULL;
+    }
 }
 
 /* Append a key/value to the request body */

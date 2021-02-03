@@ -37,6 +37,8 @@
 #include <fluent-bit/flb_plugin_proxy.h>
 #include <fluent-bit/flb_http_client_debug.h>
 #include <fluent-bit/flb_output_thread.h>
+#include <fluent-bit/flb_mp.h>
+#include <fluent-bit/flb_pack.h>
 
 FLB_TLS_DEFINE(struct flb_out_coro_params, out_coro_params);
 
@@ -70,6 +72,7 @@ static int check_protocol(const char *prot, const char *output)
 
     return 0;
 }
+
 
 /* Invoke pre-run call for the output plugin */
 void flb_output_pre_run(struct flb_config *config)
@@ -237,6 +240,10 @@ int flb_output_instance_destroy(struct flb_output_instance *ins)
             flb_tls_destroy(ins->tls);
         }
     }
+
+    if (ins->tls_config_map) {
+        flb_config_map_destroy(ins->tls_config_map);
+    }
 #endif
 
     /* Remove metrics */
@@ -391,7 +398,6 @@ struct flb_output_instance *flb_output_new(struct flb_config *config,
                                            const char *output, void *data)
 {
     int ret = -1;
-    int mask_id;
     int flags = 0;
     struct mk_list *head;
     struct flb_output_plugin *plugin;
@@ -399,17 +405,6 @@ struct flb_output_instance *flb_output_new(struct flb_config *config,
 
     if (!output) {
         return NULL;
-    }
-
-    /* Get the last mask_id reported by an output instance plugin */
-    if (mk_list_is_empty(&config->outputs) == 0) {
-        mask_id = 0;
-    }
-    else {
-        instance = mk_list_entry_last(&config->outputs,
-                                      struct flb_output_instance,
-                                      _head);
-        mask_id = (instance->mask_id);
     }
 
     mk_list_foreach(head, &config->out_plugins) {
@@ -435,20 +430,6 @@ struct flb_output_instance *flb_output_new(struct flb_config *config,
     instance->test_mode = FLB_FALSE;
     instance->is_threaded = FLB_FALSE;
 
-    /*
-     * Set mask_id: the mask_id is an unique number assigned to this
-     * output instance that is used later to set in an 'unsigned 64
-     * bit number' where a specific task (buffer/records) should be
-     * routed.
-     *
-     * note: This value is different than instance id.
-     */
-    if (mask_id == 0) {
-        instance->mask_id = 1;
-    }
-    else {
-        instance->mask_id = (mask_id * 2);
-    }
 
     /* Retrieve an instance id for the output instance */
     instance->id = instance_id(config);
@@ -910,6 +891,21 @@ int flb_output_init_all(struct flb_config *config)
             return -1;
         }
 
+#ifdef FLB_HAVE_TLS
+        struct flb_config_map *m;
+
+        /* TLS config map (just for 'help' formatting purposes) */
+        ins->tls_config_map = flb_tls_get_config_map(config);
+
+        /* Override first configmap value based on it plugin flag */
+        m = mk_list_entry_first(ins->tls_config_map, struct flb_config_map, _head);
+        if (p->flags & FLB_IO_TLS) {
+            m->value.val.boolean = FLB_TRUE;
+        }
+        else {
+            m->value.val.boolean = FLB_FALSE;
+        }
+#endif
         /*
          * Validate 'net.*' properties: if the plugin use the Upstream interface,
          * it might receive some networking settings.
@@ -1012,6 +1008,20 @@ int flb_output_upstream_set(struct flb_upstream *u, struct flb_output_instance *
 
     /* Set networking options 'net.*' received through instance properties */
     memcpy(&u->net, &ins->net_setup, sizeof(struct flb_net_setup));
+    return 0;
+}
+
+int flb_output_upstream_ha_set(void *ha, struct flb_output_instance *ins)
+{
+    struct mk_list *head;
+    struct flb_upstream_node *node;
+    struct flb_upstream_ha *upstream_ha = ha;
+
+    mk_list_foreach(head, &upstream_ha->nodes) {
+        node = mk_list_entry(head, struct flb_upstream_node, _head);
+        flb_output_upstream_set(node->u, ins);
+    }
+
     return 0;
 }
 

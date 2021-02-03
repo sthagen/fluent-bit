@@ -25,6 +25,8 @@
 
 #ifdef FLB_SYSTEM_WINDOWS
 #include <monkey/mk_core/external/winpthreads.h>
+#else
+#include <pthread.h>
 #endif
 
 /* Ideal case when the compiler support direct storage through __thread */

@@ -26,6 +26,7 @@
 #include <fluent-bit/flb_time.h>
 #include <fluent-bit/flb_signv4.h>
 #include <fluent-bit/flb_aws_credentials.h>
+#include <fluent-bit/flb_record_accessor.h>
 #include <msgpack.h>
 
 #include <time.h>
@@ -234,11 +235,7 @@ static int elasticsearch_format(struct flb_config *config,
     msgpack_sbuffer tmp_sbuf;
     msgpack_packer tmp_pck;
     uint16_t hash[8];
-    const char *es_index_custom;
     int es_index_custom_len;
-    int i;
-    msgpack_object key;
-    msgpack_object val;
     struct flb_elasticsearch *ctx = plugin_context;
 
     /* Iterate the original buffer and perform adjustments */
@@ -335,30 +332,20 @@ static int elasticsearch_format(struct flb_config *config,
 
         es_index_custom_len = 0;
         if (ctx->logstash_prefix_key) {
-            for (i = 0; i < map_size; i++) {
-                key = map.via.map.ptr[i].key;
-                if (key.type != MSGPACK_OBJECT_STR) {
-                    continue;
+            flb_sds_t v = flb_ra_translate(ctx->ra_prefix_key,
+                                           (char *) tag, tag_len,
+                                           map, NULL);
+            if (v) {
+                len = flb_sds_len(v);
+                if (len > 128) {
+                    len = 128;
+                    memcpy(logstash_index, v, 128);
                 }
-                if (key.via.str.size != flb_sds_len(ctx->logstash_prefix_key)) {
-                    continue;
+                else {
+                    memcpy(logstash_index, v, len);
                 }
-                if (strncmp(key.via.str.ptr, ctx->logstash_prefix_key,
-                            flb_sds_len(ctx->logstash_prefix_key)) != 0) {
-                    continue;
-                }
-                val = map.via.map.ptr[i].val;
-                if (val.type != MSGPACK_OBJECT_STR) {
-                    continue;
-                }
-                if (val.via.str.size >= 128) {
-                    continue;
-                }
-                es_index_custom = val.via.str.ptr;
-                es_index_custom_len = val.via.str.size;
-                memcpy(logstash_index, es_index_custom, es_index_custom_len);
-                logstash_index[es_index_custom_len] = '\0';
-                break;
+                es_index_custom_len = len;
+                flb_sds_destroy(v);
             }
         }
 
@@ -675,6 +662,9 @@ static void cb_es_flush(const void *data, size_t bytes,
     if (ctx->http_user && ctx->http_passwd) {
         flb_http_basic_auth(c, ctx->http_user, ctx->http_passwd);
     }
+    else if (ctx->cloud_user && ctx->cloud_passwd) {
+        flb_http_basic_auth(c, ctx->cloud_user, ctx->cloud_passwd);
+    }
 
 #ifdef FLB_HAVE_AWS
     if (ctx->has_aws_auth == FLB_TRUE) {
@@ -687,6 +677,9 @@ static void cb_es_flush(const void *data, size_t bytes,
         flb_http_add_header(c, "User-Agent", 10, "Fluent-Bit", 10);
     }
 #endif
+
+    /* Map debug callbacks */
+    flb_http_client_debug(c, ctx->ins->callback);
 
     ret = flb_http_do(c, &b_sent);
     if (ret != 0) {
@@ -722,7 +715,7 @@ static void cb_es_flush(const void *data, size_t bytes,
                      * input/output to Elasticsearch that caused the problem.
                      */
                     flb_plg_debug(ctx->ins, "error caused by: Input\n%s\n",
-                                   pack);
+                                  pack);
                     flb_plg_error(ctx->ins, "error: Output\n%s",
                                   c->resp.payload);
                 }
@@ -768,24 +761,36 @@ static struct flb_config_map config_map[] = {
     {
      FLB_CONFIG_MAP_STR, "index", FLB_ES_DEFAULT_INDEX,
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, index),
-     NULL
+     "Set an index name"
     },
     {
      FLB_CONFIG_MAP_STR, "type", FLB_ES_DEFAULT_TYPE,
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, type),
-     NULL
+     "Set the document type property"
     },
 
     /* HTTP Authentication */
     {
      FLB_CONFIG_MAP_STR, "http_user", NULL,
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, http_user),
-     NULL
+     "Optional username credential for Elastic X-Pack access"
     },
     {
      FLB_CONFIG_MAP_STR, "http_passwd", "",
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, http_passwd),
-     NULL
+     "Password for user defined in HTTP_User"
+    },
+
+    /* Cloud Authentication */
+    {
+     FLB_CONFIG_MAP_STR, "cloud_id", NULL,
+     0, FLB_FALSE, 0,
+     "Elastic cloud ID of the cluster to connect to"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "cloud_auth", NULL,
+     0, FLB_FALSE, 0,
+     "Elastic cloud authentication credentials"
     },
 
     /* AWS Authentication */
@@ -821,94 +826,115 @@ static struct flb_config_map config_map[] = {
     {
      FLB_CONFIG_MAP_BOOL, "logstash_format", "false",
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, logstash_format),
-     NULL
+     "Enable Logstash format compatibility"
     },
     {
      FLB_CONFIG_MAP_STR, "logstash_prefix", FLB_ES_DEFAULT_PREFIX,
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, logstash_prefix),
-     NULL
+     "When Logstash_Format is enabled, the Index name is composed using a prefix "
+     "and the date, e.g: If Logstash_Prefix is equals to 'mydata' your index will "
+     "become 'mydata-YYYY.MM.DD'. The last string appended belongs to the date "
+     "when the data is being generated"
     },
     {
      FLB_CONFIG_MAP_STR, "logstash_prefix_key", NULL,
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, logstash_prefix_key),
-     NULL
+     "When included: the value in the record that belongs to the key will be looked "
+     "up and over-write the Logstash_Prefix for index generation. If the key/value "
+     "is not found in the record then the Logstash_Prefix option will act as a "
+     "fallback. Nested keys are supported through record accessor pattern"
     },
     {
      FLB_CONFIG_MAP_STR, "logstash_dateformat", FLB_ES_DEFAULT_TIME_FMT,
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, logstash_dateformat),
-     NULL
+     "Time format (based on strftime) to generate the second part of the Index name"
     },
 
     /* Custom Time and Tag keys */
     {
      FLB_CONFIG_MAP_STR, "time_key", FLB_ES_DEFAULT_TIME_KEY,
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, time_key),
-     NULL
+     "When Logstash_Format is enabled, each record will get a new timestamp field. "
+     "The Time_Key property defines the name of that field"
     },
     {
      FLB_CONFIG_MAP_STR, "time_key_format", FLB_ES_DEFAULT_TIME_KEYF,
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, time_key_format),
-     NULL
+     "When Logstash_Format is enabled, this property defines the format of the "
+     "timestamp"
     },
     {
      FLB_CONFIG_MAP_BOOL, "time_key_nanos", "false",
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, time_key_nanos),
-     NULL
+     "When Logstash_Format is enabled, enabling this property sends nanosecond "
+     "precision timestamps"
     },
     {
      FLB_CONFIG_MAP_BOOL, "include_tag_key", "false",
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, include_tag_key),
-     NULL
+     "When enabled, it append the Tag name to the record"
     },
     {
      FLB_CONFIG_MAP_STR, "tag_key", FLB_ES_DEFAULT_TAG_KEY,
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, tag_key),
-     NULL
+     "When Include_Tag_Key is enabled, this property defines the key name for the tag"
     },
     {
      FLB_CONFIG_MAP_SIZE, "buffer_size", FLB_ES_DEFAULT_HTTP_MAX,
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, buffer_size),
-     NULL
+     "Specify the buffer size used to read the response from the Elasticsearch HTTP "
+     "service. This option is useful for debugging purposes where is required to read "
+     "full responses, note that response size grows depending of the number of records "
+     "inserted. To set an unlimited amount of memory set this value to 'false', "
+     "otherwise the value must be according to the Unit Size specification"
     },
 
     /* Elasticsearch specifics */
     {
      FLB_CONFIG_MAP_STR, "path", NULL,
      0, FLB_FALSE, 0,
-     NULL
+     "Elasticsearch accepts new data on HTTP query path '/_bulk'. But it is also "
+     "possible to serve Elasticsearch behind a reverse proxy on a subpath. This "
+     "option defines such path on the fluent-bit side. It simply adds a path "
+     "prefix in the indexing HTTP POST URI"
     },
     {
      FLB_CONFIG_MAP_STR, "pipeline", NULL,
      0, FLB_FALSE, 0,
-     NULL
+     "Newer versions of Elasticsearch allows to setup filters called pipelines. "
+     "This option allows to define which pipeline the database should use. For "
+     "performance reasons is strongly suggested to do parsing and filtering on "
+     "Fluent Bit side, avoid pipelines"
     },
     {
      FLB_CONFIG_MAP_BOOL, "generate_id", "false",
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, generate_id),
-     NULL
+     "When enabled, generate _id for outgoing records. This prevents duplicate "
+     "records when retrying ES"
     },
     {
      FLB_CONFIG_MAP_BOOL, "replace_dots", "false",
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, replace_dots),
-     NULL
+     "When enabled, replace field name dots with underscore, required by Elasticsearch "
+     "2.0-2.3."
     },
 
     {
      FLB_CONFIG_MAP_BOOL, "current_time_index", "false",
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, current_time_index),
-     NULL
+     "Use current time for index generation instead of message record"
     },
 
     /* Trace */
     {
      FLB_CONFIG_MAP_BOOL, "trace_output", "false",
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, trace_output),
-     NULL
+     "When enabled print the Elasticsearch API calls to stdout (for diag only)"
     },
     {
      FLB_CONFIG_MAP_BOOL, "trace_error", "false",
      0, FLB_TRUE, offsetof(struct flb_elasticsearch, trace_error),
-     NULL
+     "When enabled print the Elasticsearch exception to stderr (for diag only)"
     },
 
     /* EOF */

@@ -842,6 +842,9 @@ static inline int extract_meta(struct flb_kube *ctx,
         if (meta->container_name) {
             n += meta->container_name_len + 1;
         }
+        if (ctx->cache_use_docker_id && meta->docker_id) {
+            n += meta->docker_id_len + 1;
+        }
         meta->cache_key = flb_malloc(n);
         if (!meta->cache_key) {
             flb_errno();
@@ -864,6 +867,13 @@ static inline int extract_meta(struct flb_kube *ctx,
             meta->cache_key[off++] = ':';
             memcpy(meta->cache_key + off, meta->container_name, meta->container_name_len);
             off += meta->container_name_len;
+        }
+
+        if (ctx->cache_use_docker_id && meta->docker_id) {
+            /* Separator */
+            meta->cache_key[off++] = ':';
+            memcpy(meta->cache_key + off, meta->docker_id, meta->docker_id_len);
+            off += meta->docker_id_len;
         }
 
         meta->cache_key[off] = '\0';
@@ -1079,7 +1089,7 @@ int flb_kube_meta_get(struct flb_kube *ctx,
     /* Check if we have some data associated to the cache key */
     ret = flb_hash_get(ctx->hash_table,
                        meta->cache_key, meta->cache_key_len,
-                       &hash_meta_buf, &hash_meta_size);
+                       (void *) &hash_meta_buf, &hash_meta_size);
     if (ret == -1) {
         /* Retrieve API server meta and merge with local meta */
         ret = get_and_merge_meta(ctx, meta,

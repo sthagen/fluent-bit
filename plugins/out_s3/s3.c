@@ -27,6 +27,7 @@
 #include <fluent-bit/flb_aws_util.h>
 #include <fluent-bit/flb_signv4.h>
 #include <fluent-bit/flb_scheduler.h>
+#include <fluent-bit/flb_gzip.h>
 #include <stdlib.h>
 #include <msgpack.h>
 
@@ -50,6 +51,26 @@ static struct multipart_upload *get_upload(struct flb_s3 *ctx,
 static struct multipart_upload *create_upload(struct flb_s3 *ctx,
                                               const char *tag, int tag_len);
 
+static struct flb_aws_header content_encoding_header = {
+    .key = "Content-Encoding",
+    .key_len = 16,
+    .val = "gzip",
+    .val_len = 4,
+};
+
+static struct flb_aws_header content_type_header = {
+    .key = "Content-Type",
+    .key_len = 12,
+    .val = "",
+    .val_len = 0,
+};
+
+static struct flb_aws_header canned_acl_header = {
+    .key = "x-amz-acl",
+    .key_len = 9,
+    .val = "",
+    .val_len = 0,
+};
 
 static char *mock_error_response(char *error_env_var)
 {
@@ -83,22 +104,52 @@ int s3_plugin_under_test()
     return FLB_FALSE;
 }
 
-struct flb_aws_header *create_canned_acl_header(char *canned_acl)
+static int create_headers(struct flb_s3 *ctx, struct flb_aws_header **headers, int *num_headers)
 {
-    struct flb_aws_header *acl_header = NULL;
+    int n = 0;
+    int headers_len = 0;
+    struct flb_aws_header *s3_headers = NULL;
 
-    acl_header = flb_malloc(sizeof(struct flb_aws_header));
-    if (acl_header == NULL) {
+    if (ctx->content_type != NULL) {
+        headers_len++;
+    }
+    if (ctx->compression != NULL) {
+        headers_len++;
+    }
+    if (ctx->canned_acl != NULL) {
+        headers_len++;
+    }
+    if (headers_len == 0) {
+        *num_headers = headers_len;
+        *headers = s3_headers;
+        return 0;
+    }
+    
+    s3_headers = flb_malloc(sizeof(struct flb_aws_header) * headers_len);
+    if (s3_headers == NULL) {
         flb_errno();
-        return NULL;
+        return -1;
     }
 
-    acl_header->key = "x-amz-acl";
-    acl_header->key_len = 9;
-    acl_header->val = canned_acl;
-    acl_header->val_len = strlen(canned_acl);
-
-    return acl_header;
+    if (ctx->content_type != NULL) {
+        s3_headers[n] = content_type_header;
+        s3_headers[n].val = ctx->content_type;
+        s3_headers[n].val_len = strlen(ctx->content_type);
+        n++;
+    }
+    if (ctx->compression != NULL) {
+        s3_headers[n] = content_encoding_header;
+        n++;
+    }
+    if (ctx->canned_acl != NULL) {
+        s3_headers[n] = canned_acl_header;
+        s3_headers[n].val = ctx->canned_acl;
+        s3_headers[n].val_len = strlen(ctx->canned_acl);
+    }
+    
+    *num_headers = headers_len;
+    *headers = s3_headers;
+    return 0;
 };
 
 struct flb_http_client *mock_s3_call(char *error_env_var, char *api)
@@ -361,6 +412,11 @@ static int cb_s3_init(struct flb_output_instance *ins,
     }
     flb_plg_info(ctx->ins, "Using upload size %lu bytes", ctx->file_size);
 
+    if (ctx->use_put_object == FLB_FALSE && ctx->file_size < 2 * MIN_CHUNKED_UPLOAD_SIZE) {
+            flb_plg_info(ctx->ins,
+                         "total_file_size is less than 10 MB, will use PutObject API");
+            ctx->use_put_object = FLB_TRUE;
+    }
 
     if (ctx->use_put_object == FLB_FALSE) {
         /* upload_chunk_size */
@@ -380,12 +436,6 @@ static int cb_s3_init(struct flb_output_instance *ins,
         if (ctx->upload_chunk_size > MAX_CHUNKED_UPLOAD_SIZE) {
             flb_plg_error(ctx->ins, "Max upload_chunk_size is 50M");
             return -1;
-        }
-
-        if (ctx->file_size < 2 * MIN_CHUNKED_UPLOAD_SIZE) {
-            flb_plg_info(ctx->ins,
-                         "total_file_size is less than 10 MB, will use PutObject API");
-            ctx->use_put_object = FLB_TRUE;
         }
     }
 
@@ -432,6 +482,26 @@ static int cb_s3_init(struct flb_output_instance *ins,
         ctx->canned_acl = (char *) tmp;
     }
 
+    tmp = flb_output_get_property("compression", ins);
+    if (tmp) {
+        if (strcmp((char *) tmp, "gzip") != 0) {
+            flb_plg_error(ctx->ins, 
+                          "'gzip' is currently the only supported value for 'compression'");
+            return -1;
+        } else if (ctx->use_put_object == FLB_FALSE) {
+            flb_plg_error(ctx->ins, 
+                          "use_put_object must be enabled when compression is enabled");
+            return -1;
+        }
+        
+        ctx->compression = (char *) tmp;
+    }
+
+    tmp = flb_output_get_property("content_type", ins);
+    if (tmp) {
+        ctx->content_type = (char *) tmp;
+    }
+    
     ctx->client_tls = flb_tls_create(FLB_TRUE,
                                      ins->tls_debug,
                                      ins->tls_vhost,
@@ -930,13 +1000,18 @@ static int s3_put_object(struct flb_s3 *ctx, const char *tag, time_t create_time
     flb_sds_t s3_key = NULL;
     struct flb_http_client *c = NULL;
     struct flb_aws_client *s3_client;
-    struct flb_aws_header *canned_acl_header;
+    struct flb_aws_header *headers = NULL;
     char *random_alphanumeric;
     int append_random = FLB_FALSE;
     int len;
+    int ret;
+    int num_headers = 0;
     char *final_key;
     flb_sds_t uri;
     flb_sds_t tmp;
+    void *compressed_body;
+    char *final_body;
+    size_t final_body_size;
 
     s3_key = flb_get_s3_key(ctx->s3_key_format, create_time, tag, ctx->tag_delimiters);
     if (!s3_key) {
@@ -980,28 +1055,34 @@ static int s3_put_object(struct flb_s3 *ctx, const char *tag, time_t create_time
     flb_sds_destroy(s3_key);
     uri = tmp;
 
+    if (ctx->compression != NULL) {
+        ret = flb_gzip_compress(body, body_size, &compressed_body, &final_body_size);
+        if (ret == -1) {
+            flb_plg_error(ctx->ins, "Failed to compress data");
+            flb_sds_destroy(uri);
+            return -1;
+        }
+        final_body = (char *) compressed_body;
+    } else {
+        final_body = body;
+        final_body_size = body_size;
+    }
+    
     s3_client = ctx->s3_client;
     if (s3_plugin_under_test() == FLB_TRUE) {
         c = mock_s3_call("TEST_PUT_OBJECT_ERROR", "PutObject");
     }
     else {
-        if (ctx->canned_acl == NULL) {
-            c = s3_client->client_vtable->request(s3_client, FLB_HTTP_PUT,
-                                                  uri, body, body_size,
-                                                  NULL, 0);
+        ret = create_headers(ctx, &headers, &num_headers);
+        if (ret == -1) {
+            flb_plg_error(ctx->ins, "Failed to create headers");
+            flb_sds_destroy(uri);
+            return -1;
         }
-        else {
-            canned_acl_header = create_canned_acl_header(ctx->canned_acl);
-            if (canned_acl_header == NULL) {
-                flb_sds_destroy(uri);
-                flb_plg_error(ctx->ins, "Failed to create canned ACL header");
-                return -1;
-            }
-            c = s3_client->client_vtable->request(s3_client, FLB_HTTP_PUT,
-                                                  uri, body, body_size,
-                                                  canned_acl_header, 1);
-            flb_free(canned_acl_header);
-        }
+        c = s3_client->client_vtable->request(s3_client, FLB_HTTP_PUT,
+                                              uri, final_body, final_body_size,
+                                              headers, num_headers);
+        flb_free(headers);
     }
     if (c) {
         flb_plg_debug(ctx->ins, "PutObject http status=%d", c->resp.status);
@@ -1200,17 +1281,18 @@ static void cb_s3_flush(const void *data, size_t bytes,
                             void *out_context,
                             struct flb_config *config)
 {
-    struct flb_s3 *ctx = out_context;
-    flb_sds_t json = NULL;
-    struct s3_file *chunk = NULL;
-    struct multipart_upload *m_upload = NULL;
-    char *buffer = NULL;
-    size_t buffer_size;
-    int timeout_check = FLB_FALSE;
-    size_t chunk_size = 0;
-    size_t upload_size = 0;
     int ret;
     int len;
+    int timeout_check = FLB_FALSE;
+    char *buffer = NULL;
+    size_t buffer_size;
+    size_t chunk_size = 0;
+    size_t upload_size = 0;
+    flb_sds_t json = NULL;
+    struct s3_file *chunk = NULL;
+    struct flb_s3 *ctx = out_context;
+    struct multipart_upload *m_upload = NULL;
+    struct flb_sched *sched;
     (void) i_ins;
     (void) config;
 
@@ -1242,7 +1324,8 @@ static void cb_s3_flush(const void *data, size_t bytes,
                       "Creating upload timer with frequency %ds",
                       ctx->timer_ms / 1000);
 
-        ret = flb_sched_timer_cb_create(config, FLB_SCHED_TIMER_CB_PERM,
+        sched = flb_sched_ctx_get();
+        ret = flb_sched_timer_cb_create(sched, FLB_SCHED_TIMER_CB_PERM,
                                         ctx->timer_ms,
                                         cb_s3_upload,
                                         ctx);
@@ -1446,6 +1529,18 @@ static struct flb_config_map config_map[] = {
      FLB_CONFIG_MAP_STR, "canned_acl", NULL,
      0, FLB_FALSE, 0,
     "Predefined Canned ACL policy for S3 objects."
+    },
+    {
+     FLB_CONFIG_MAP_STR, "compression", NULL,
+     0, FLB_FALSE, 0,
+    "Compression type for S3 objects. 'gzip' is currently the only supported value. "
+    "The Content-Encoding HTTP Header will be set to 'gzip'."
+    },
+    {
+     FLB_CONFIG_MAP_STR, "content_type", NULL,
+     0, FLB_FALSE, 0,
+    "A standard MIME type for the S3 object; this will be set "
+    "as the Content-Type HTTP header."
     },
 
     {

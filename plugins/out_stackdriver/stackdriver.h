@@ -25,6 +25,7 @@
 #include <fluent-bit/flb_output.h>
 #include <fluent-bit/flb_oauth2.h>
 #include <fluent-bit/flb_sds.h>
+#include <fluent-bit/flb_pthread.h>
 
 /* refresh token every 50 minutes */
 #define FLB_STD_TOKEN_REFRESH 3000
@@ -91,6 +92,7 @@ struct flb_stackdriver {
     bool metadata_server_auth;
 
     /* metadata server (GCP specific, WIP) */
+    flb_sds_t metadata_server;
     flb_sds_t zone;
     flb_sds_t instance_id;
     flb_sds_t instance_name;
@@ -102,11 +104,24 @@ struct flb_stackdriver {
     flb_sds_t pod_name;
     flb_sds_t container_name;
     flb_sds_t node_name;
-    bool k8s_resource_type;
+    bool is_k8s_resource_type;
 
     flb_sds_t labels_key;
     flb_sds_t local_resource_id;
     flb_sds_t tag_prefix;
+
+    /* generic resources */
+    flb_sds_t location;
+    flb_sds_t namespace_id;
+    bool is_generic_resource_type;
+
+    /* generic_node specific */
+    flb_sds_t node_id;
+
+    /* generic_task specific */
+    flb_sds_t job;
+    flb_sds_t task_id;
+
 
     /* other */
     flb_sds_t resource;
@@ -117,6 +132,9 @@ struct flb_stackdriver {
 
     /* oauth2 context */
     struct flb_oauth2 *o;
+
+    /* mutex for acquiring oauth tokens */
+    pthread_mutex_t token_mutex;
 
     /* upstream context for stackdriver write end-point */
     struct flb_upstream *u;

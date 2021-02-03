@@ -54,7 +54,7 @@ static int cb_nats_init(struct flb_output_instance *ins, struct flb_config *conf
     upstream = flb_upstream_create(config,
                                    ins->host.name,
                                    ins->host.port,
-                                   FLB_IO_TCP,
+                                   io_flags,
                                    NULL);
     if (!upstream) {
         flb_free(ctx);
@@ -62,6 +62,7 @@ static int cb_nats_init(struct flb_output_instance *ins, struct flb_config *conf
     }
     ctx->u   = upstream;
     ctx->ins = ins;
+    flb_output_upstream_set(ctx->u, ins);
     flb_output_set_context(ins, ctx);
 
     return 0;

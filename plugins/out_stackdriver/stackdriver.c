@@ -25,6 +25,7 @@
 #include <fluent-bit/flb_time.h>
 #include <fluent-bit/flb_oauth2.h>
 #include <fluent-bit/flb_regex.h>
+#include <fluent-bit/flb_pthread.h>
 
 #include <msgpack.h>
 
@@ -202,12 +203,7 @@ static int get_oauth2_token(struct flb_stackdriver *ctx)
     time_t expires;
     char payload[1024];
 
-    /* Create oauth2 context */
-    ctx->o = flb_oauth2_create(ctx->config, FLB_STD_AUTH_URL, 3000);
-    if (!ctx->o) {
-        flb_plg_error(ctx->ins, "cannot create oauth2 context");
-        return -1;
-    }
+    flb_oauth2_payload_clear(ctx->o);
 
     /* In case of using metadata server, fetch token from there */
     if (ctx->metadata_server_auth) {
@@ -263,23 +259,32 @@ static int get_oauth2_token(struct flb_stackdriver *ctx)
     return 0;
 }
 
-static char *get_google_token(struct flb_stackdriver *ctx)
+static flb_sds_t get_google_token(struct flb_stackdriver *ctx)
 {
     int ret = 0;
+    flb_sds_t output = NULL;
 
-    if (!ctx->o) {
-        ret = get_oauth2_token(ctx);
-    }
-    else if (flb_oauth2_token_expired(ctx->o) == FLB_TRUE) {
-        flb_oauth2_destroy(ctx->o);
-        ret = get_oauth2_token(ctx);
-    }
-
-    if (ret != 0) {
+    if (pthread_mutex_lock(&ctx->token_mutex)){
+        flb_plg_error(ctx->ins, "error locking mutex");
         return NULL;
     }
 
-    return ctx->o->access_token;
+    if (flb_oauth2_token_expired(ctx->o) == FLB_TRUE) {
+        ret = get_oauth2_token(ctx);
+    }
+
+    /* Copy string to prevent race conditions (get_oauth2 can free the string) */
+    if (ret == 0) {
+        output = flb_sds_create(ctx->o->access_token);
+    }
+
+    if (pthread_mutex_unlock(&ctx->token_mutex)){
+        flb_plg_error(ctx->ins, "error unlocking mutex");
+        return NULL;
+    }
+
+
+    return output;
 }
 
 static bool validate_msgpack_unpacked_data(msgpack_object root)
@@ -855,11 +860,18 @@ static int cb_stackdriver_init(struct flb_output_instance *ins,
         io_flags |= FLB_IO_IPV6;
     }
 
+    /* Create mutex for acquiring oauth tokens (they are shared across flush coroutines) */
+    pthread_mutex_init ( &ctx->token_mutex, NULL);
+
     /* Create Upstream context for Stackdriver Logging (no oauth2 service) */
     ctx->u = flb_upstream_create_url(config, FLB_STD_WRITE_URL,
                                      io_flags, ins->tls);
-    ctx->metadata_u = flb_upstream_create_url(config, "http://metadata.google.internal",
+    ctx->metadata_u = flb_upstream_create_url(config, ctx->metadata_server,
                                               FLB_IO_TCP, NULL);
+
+    /* Create oauth2 context */
+    ctx->o = flb_oauth2_create(ctx->config, FLB_STD_AUTH_URL, 3000);
+
     if (!ctx->u) {
         flb_plg_error(ctx->ins, "upstream creation failed");
         return -1;
@@ -868,6 +880,11 @@ static int cb_stackdriver_init(struct flb_output_instance *ins,
         flb_plg_error(ctx->ins, "metadata upstream creation failed");
         return -1;
     }
+    if (!ctx->o) {
+        flb_plg_error(ctx->ins, "cannot create oauth2 context");
+        return -1;
+    }
+    flb_output_upstream_set(ctx->u, ins);
 
     /* Metadata Upstream Sync flags */
     ctx->metadata_u->flags &= ~FLB_IO_ASYNC;
@@ -877,6 +894,8 @@ static int cb_stackdriver_init(struct flb_output_instance *ins,
         token = get_google_token(ctx);
         if (!token) {
             flb_plg_warn(ctx->ins, "token retrieval failed");
+        } else {
+            flb_sds_destroy(token);
         }
     }
 
@@ -886,14 +905,16 @@ static int cb_stackdriver_init(struct flb_output_instance *ins,
             return -1;
         }
 
-        ret = gce_metadata_read_zone(ctx);
-        if (ret == -1) {
-            return -1;
-        }
+        if (!ctx->is_generic_resource_type) {
+            ret = gce_metadata_read_zone(ctx);
+            if (ret == -1) {
+                return -1;
+            }
 
-        ret = gce_metadata_read_instance_id(ctx);
-        if (ret == -1) {
-            return -1;
+            ret = gce_metadata_read_instance_id(ctx);
+            if (ret == -1) {
+                return -1;
+            }
         }
     }
 
@@ -1392,7 +1413,7 @@ static int stackdriver_format(struct flb_config *config,
     msgpack_pack_str(&mp_pck, 6);
     msgpack_pack_str_body(&mp_pck, "labels", 6);
 
-    if (ctx->k8s_resource_type) {
+    if (ctx->is_k8s_resource_type) {
         ret = extract_local_resource_id(data, bytes, ctx, tag);
         if (ret != 0) {
             flb_plg_error(ctx->ins, "fail to construct local_resource_id");
@@ -1411,6 +1432,52 @@ static int stackdriver_format(struct flb_config *config,
             msgpack_pack_str(&mp_pck, flb_sds_len(ctx->project_id));
             msgpack_pack_str_body(&mp_pck,
                                   ctx->project_id, flb_sds_len(ctx->project_id));
+        }
+        else if (ctx->is_generic_resource_type) {
+            if (strcmp(ctx->resource, "generic_node") == 0) {
+                /* generic_node has fields project_id, location, namespace, node_id */
+                msgpack_pack_map(&mp_pck, 4);
+
+                msgpack_pack_str(&mp_pck, 7);
+                msgpack_pack_str_body(&mp_pck, "node_id", 7);
+                msgpack_pack_str(&mp_pck, flb_sds_len(ctx->node_id));
+                msgpack_pack_str_body(&mp_pck,
+                                      ctx->node_id, flb_sds_len(ctx->node_id));
+            }
+            else {
+                 /* generic_task has fields project_id, location, namespace, job, task_id */
+                msgpack_pack_map(&mp_pck, 5);
+
+                msgpack_pack_str(&mp_pck, 3);
+                msgpack_pack_str_body(&mp_pck, "job", 3);
+                msgpack_pack_str(&mp_pck, flb_sds_len(ctx->job));
+                msgpack_pack_str_body(&mp_pck,
+                                      ctx->job, flb_sds_len(ctx->job));
+
+                msgpack_pack_str(&mp_pck, 7);
+                msgpack_pack_str_body(&mp_pck, "task_id", 7);
+                msgpack_pack_str(&mp_pck, flb_sds_len(ctx->task_id));
+                msgpack_pack_str_body(&mp_pck,
+                                      ctx->task_id, flb_sds_len(ctx->task_id));
+            }
+
+            msgpack_pack_str(&mp_pck, 10);
+            msgpack_pack_str_body(&mp_pck, "project_id", 10);
+            msgpack_pack_str(&mp_pck, flb_sds_len(ctx->project_id));
+            msgpack_pack_str_body(&mp_pck,
+                                  ctx->project_id, flb_sds_len(ctx->project_id));
+
+            msgpack_pack_str(&mp_pck, 8);
+            msgpack_pack_str_body(&mp_pck, "location", 8);
+            msgpack_pack_str(&mp_pck, flb_sds_len(ctx->location));
+            msgpack_pack_str_body(&mp_pck,
+                                  ctx->location, flb_sds_len(ctx->location));
+
+            msgpack_pack_str(&mp_pck, 9);
+            msgpack_pack_str_body(&mp_pck, "namespace", 9);
+            msgpack_pack_str(&mp_pck, flb_sds_len(ctx->namespace_id));
+            msgpack_pack_str_body(&mp_pck,
+                                  ctx->namespace_id, flb_sds_len(ctx->namespace_id));
         }
         else if (strcmp(ctx->resource, "gce_instance") == 0) {
             /* gce_instance resource has fields project_id, zone, instance_id */
@@ -1785,7 +1852,7 @@ static int stackdriver_format(struct flb_config *config,
 
         /* avoid modifying the original tag */
         newtag = tag;
-        if (ctx->k8s_resource_type) {
+        if (ctx->is_k8s_resource_type) {
             stream = get_stream(result.data.via.array.ptr[1].via.map);
             if (stream == STREAM_STDOUT) {
                 newtag = "stdout";
@@ -1878,7 +1945,7 @@ static void cb_stackdriver_flush(const void *data, size_t bytes,
     int ret;
     int ret_code = FLB_RETRY;
     size_t b_sent;
-    char *token;
+    flb_sds_t token;
     flb_sds_t payload_buf;
     size_t payload_size;
     void *out_buf;
@@ -1958,6 +2025,7 @@ static void cb_stackdriver_flush(const void *data, size_t bytes,
 
     /* Cleanup */
     flb_sds_destroy(payload_buf);
+    flb_sds_destroy(token);
     flb_http_client_destroy(c);
     flb_upstream_conn_release(u_conn);
 

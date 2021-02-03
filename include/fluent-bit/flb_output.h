@@ -45,6 +45,8 @@
 #include <fluent-bit/flb_http_client.h>
 #include <fluent-bit/tls/flb_tls.h>
 #include <fluent-bit/flb_output_thread.h>
+#include <fluent-bit/flb_upstream.h>
+#include <fluent-bit/flb_upstream_ha.h>
 
 #ifdef FLB_HAVE_REGEX
 #include <fluent-bit/flb_regex.h>
@@ -191,7 +193,6 @@ struct flb_output_plugin {
  */
 struct flb_output_instance {
     struct mk_event event;               /* events handler               */
-    uint64_t mask_id;                    /* internal bitmask for routing */
     int id;                              /* instance id                  */
     int log_level;                       /* instance log level           */
     char name[32];                       /* numbered name (cpu -> cpu.0) */
@@ -277,6 +278,8 @@ struct flb_output_instance {
     struct flb_net_setup net_setup;
     struct mk_list *net_config_map;
     struct mk_list net_properties;
+
+    struct mk_list *tls_config_map;
 
     struct mk_list _head;                /* link to config->inputs       */
 
@@ -647,6 +650,8 @@ static inline int flb_output_config_map_set(struct flb_output_instance *ins,
     return ret;
 }
 
+int flb_output_help(struct flb_output_instance *ins, void **out_buf, size_t *out_size);
+
 struct flb_output_instance *flb_output_get_instance(struct flb_config *config,
                                                     int out_id);
 int flb_output_flush_finished(struct flb_config *config, int out_id);
@@ -666,7 +671,10 @@ void flb_output_set_context(struct flb_output_instance *ins, void *context);
 int flb_output_instance_destroy(struct flb_output_instance *ins);
 int flb_output_init_all(struct flb_config *config);
 int flb_output_check(struct flb_config *config);
+
 int flb_output_upstream_set(struct flb_upstream *u, struct flb_output_instance *ins);
+int flb_output_upstream_ha_set(void *ha, struct flb_output_instance *ins);
+
 void flb_output_prepare();
 int flb_output_set_http_debug_callbacks(struct flb_output_instance *ins);
 
