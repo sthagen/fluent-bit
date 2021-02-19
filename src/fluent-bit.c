@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -90,7 +90,7 @@ static void flb_banner()
 {
     fprintf(stderr, "%sFluent Bit v%s%s\n", ANSI_BOLD, FLB_VERSION_STR,
             ANSI_RESET);
-    fprintf(stderr, "* %sCopyright (C) 2019-2020 The Fluent Bit Authors%s\n",
+    fprintf(stderr, "* %sCopyright (C) 2019-2021 The Fluent Bit Authors%s\n",
             ANSI_BOLD ANSI_YELLOW, ANSI_RESET);
     fprintf(stderr, "* %sCopyright (C) 2015-2018 Treasure Data%s\n",
             ANSI_BOLD ANSI_YELLOW, ANSI_RESET);
@@ -557,7 +557,7 @@ static int input_set_property(struct flb_input_instance *in, char *kv)
                 in->p->name, key);
     }
 
-    flb_free(key);
+    mk_mem_free(key);
     return ret;
 }
 
@@ -582,7 +582,7 @@ static int output_set_property(struct flb_output_instance *out, char *kv)
     }
 
     ret = flb_output_set_property(out, key, value);
-    flb_free(key);
+    mk_mem_free(key);
     return ret;
 }
 
@@ -608,7 +608,7 @@ static int filter_set_property(struct flb_filter_instance *filter, char *kv)
     }
 
     ret = flb_filter_set_property(filter, key, value);
-    flb_free(key);
+    mk_mem_free(key);
     return ret;
 }
 

@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -931,6 +931,7 @@ int flb_utils_proxy_url_split(const char *in_url, char **out_protocol,
         /* Parse username:passwrod part. */
         tmp = strchr(proto_sep, ':');
         if (!tmp) {
+            flb_free(protocol);
             return -1;
         }
         username = mk_string_copy_substr(proto_sep, 0, tmp - proto_sep);

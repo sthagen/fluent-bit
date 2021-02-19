@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -133,6 +133,12 @@ static void cb_mq_metrics(mk_mq_t *queue, void *data, size_t size)
     buf->data = out_data;
 
     buf->raw_data = flb_malloc(size);
+    if (!buf->raw_data) {
+        flb_errno();
+        flb_sds_destroy(out_data);
+        flb_free(buf);
+        return;
+    }
     memcpy(buf->raw_data, data, size);
     buf->raw_size = size;
 
@@ -263,6 +269,7 @@ void cb_metrics_prometheus(mk_request_t *request, void *data)
     /* length of HELP text */
     metric_helptxt = flb_sds_create_size(128);
     if (!metric_helptxt) {
+        flb_sds_destroy(sds);
         mk_http_status(request, 500);
         mk_http_done(request);
         buf->users--;
@@ -297,6 +304,18 @@ void cb_metrics_prometheus(mk_request_t *request, void *data)
         }
     }
     metrics_arr = flb_malloc(num_metrics * sizeof(char*));
+    if (!metrics_arr) {
+        flb_errno();
+
+        mk_http_status(request, 500);
+        mk_http_done(request);
+        buf->users--;
+
+        flb_sds_destroy(sds);
+        flb_sds_destroy(metric_helptxt);
+        msgpack_unpacked_destroy(&result);
+        return;
+    }
 
     for (i = 0; i < map.via.map.size; i++) {
         msgpack_object k;

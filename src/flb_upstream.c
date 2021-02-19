@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -113,7 +113,16 @@ struct flb_upstream_queue *flb_upstream_queue_get(struct flb_upstream *u)
     if (u->thread_safe == FLB_TRUE) {
         list = flb_upstream_list_get();
         if (!list) {
-            return NULL;
+            /*
+             * Here is the issue: a plugin enabled in multiworker mode in the
+             * initialization callback might wanted to use an upstream
+             * connection, but the init callback does not run in threaded mode
+             * so we hit this problem.
+             *
+             * As a fallback mechanism: just cross our fingers and return the
+             * principal upstream queue.
+             */
+            return (struct flb_upstream_queue *) &u->queue;
         }
 
         mk_list_foreach(head, list) {
@@ -183,6 +192,7 @@ struct flb_upstream *flb_upstream_create(struct flb_config *config,
                                         &proxy_host, &proxy_port);
         if (ret == -1) {
             flb_errno();
+            flb_free(u);
             return NULL;
         }
 
@@ -622,6 +632,7 @@ int flb_upstream_conn_timeouts(struct mk_list *list)
     int drop;
     struct mk_list *head;
     struct mk_list *u_head;
+    struct mk_list *tmp;
     struct flb_upstream *u;
     struct flb_upstream_conn *u_conn;
     struct flb_upstream_queue *uq;
@@ -667,10 +678,11 @@ int flb_upstream_conn_timeouts(struct mk_list *list)
         }
 
         /* Check every available Keepalive connection */
-        mk_list_foreach(u_head, &uq->av_queue) {
+        mk_list_foreach_safe(u_head, tmp, &uq->av_queue) {
             u_conn = mk_list_entry(u_head, struct flb_upstream_conn, _head);
             if ((now - u_conn->ts_available) >= u->net.keepalive_idle_timeout) {
                 shutdown(u_conn->fd, SHUT_RDWR);
+                prepare_destroy_conn(u_conn);
                 flb_debug("[upstream] drop keepalive connection #%i to %s:%i "
                           "(keepalive idle timeout)",
                           u_conn->fd, u->tcp_host, u->tcp_port);

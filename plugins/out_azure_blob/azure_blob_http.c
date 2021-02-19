@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -171,7 +171,7 @@ flb_sds_t azb_http_canonical_request(struct flb_azure_blob *ctx,
     flb_sds_t tmp = NULL;
     char *b64 = NULL;
     char *encoding;
-    char *ctype;
+    char *ctype = "";
     unsigned char signature[32];
 
     size = strlen(c->uri) + (mk_list_size(&c->headers) * 64) + 256;
@@ -269,7 +269,6 @@ flb_sds_t azb_http_canonical_request(struct flb_azure_blob *ctx,
     if (!tmp) {
         flb_sds_destroy(can_res);
         flb_sds_destroy(can_req);
-        flb_sds_destroy(can_headers);
         return NULL;
     }
     can_req = tmp;

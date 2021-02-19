@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -73,6 +73,7 @@ int flb_engine_dispatch_retry(struct flb_task_retry *retry,
 
     ret = flb_output_task_flush(task, retry->o_ins, config);
     if (ret == -1) {
+        flb_task_retry_destroy(retry);
         return -1;
     }
     return 0;

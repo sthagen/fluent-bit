@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,7 +27,6 @@
 
 static int http_conn_event(void *data)
 {
-    int ret;
     int status;
     size_t size;
     ssize_t available;
@@ -87,7 +86,7 @@ static int http_conn_event(void *data)
                                 conn->buf_data, conn->buf_len, NULL);
         if (status == MK_HTTP_PARSER_OK) {
             /* Do more logic parsing and checks for this request */
-            ret = http_prot_handle(ctx, conn, session, request);
+            http_prot_handle(ctx, conn, session, request);
         }
 
         /* FIXME: add Protocol handler here */

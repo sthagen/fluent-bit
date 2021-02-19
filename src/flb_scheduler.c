@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -386,6 +386,7 @@ int flb_sched_request_invalidate(struct flb_config *config, void *data)
 /* Handle a timeout event set by a previous flb_sched_request_create(...) */
 int flb_sched_event_handler(struct flb_config *config, struct mk_event *event)
 {
+    int ret;
     struct flb_sched *sched;
     struct flb_sched_timer *timer;
     struct flb_sched_request *req;
@@ -401,10 +402,12 @@ int flb_sched_event_handler(struct flb_config *config, struct mk_event *event)
         consume_byte(req->fd);
 
         /* Dispatch 'retry' */
-        flb_engine_dispatch_retry(req->data, config);
+        ret = flb_engine_dispatch_retry(req->data, config);
 
         /* Destroy this scheduled request, it's not longer required */
-        flb_sched_request_destroy(req);
+        if (ret == 0) {
+            flb_sched_request_destroy(req);
+        }
     }
     else if (timer->type == FLB_SCHED_TIMER_FRAME) {
         sched = timer->data;

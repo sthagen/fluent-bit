@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -280,6 +280,9 @@ static flb_sds_t get_google_token(struct flb_stackdriver *ctx)
 
     if (pthread_mutex_unlock(&ctx->token_mutex)){
         flb_plg_error(ctx->ins, "error unlocking mutex");
+        if (output) {
+            flb_sds_destroy(output);
+        }
         return NULL;
     }
 
@@ -1324,7 +1327,7 @@ static int stackdriver_format(struct flb_config *config,
 
     /* Parameters for log name */
     int log_name_extracted = FLB_FALSE;
-    flb_sds_t log_name;
+    flb_sds_t log_name = NULL;
 
     /* Parameters for insertId */
     msgpack_object insert_id_obj;
@@ -1716,6 +1719,9 @@ static int stackdriver_format(struct flb_config *config,
             insert_id_extracted = FLB_FALSE;
         }
         else {
+            if (log_name_extracted == FLB_TRUE) {
+                flb_sds_destroy(log_name);
+            }
             continue;
         }
 

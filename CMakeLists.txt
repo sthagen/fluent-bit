@@ -3,7 +3,7 @@ project(fluent-bit)
 
 # Fluent Bit Version
 set(FLB_VERSION_MAJOR  1)
-set(FLB_VERSION_MINOR  7)
+set(FLB_VERSION_MINOR  8)
 set(FLB_VERSION_PATCH  0)
 set(FLB_VERSION_STR "${FLB_VERSION_MAJOR}.${FLB_VERSION_MINOR}.${FLB_VERSION_PATCH}")
 
@@ -743,6 +743,10 @@ endif()
 add_subdirectory(include)
 add_subdirectory(plugins)
 add_subdirectory(src)
+
+if(NOT FLB_SHARED_LIB)
+  set(FLB_EXAMPLES OFF)
+endif()
 
 if(FLB_EXAMPLES)
   add_subdirectory(examples)

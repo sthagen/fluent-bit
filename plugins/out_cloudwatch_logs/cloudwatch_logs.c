@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -401,7 +401,7 @@ static void cb_cloudwatch_flush(const void *data, size_t bytes,
         FLB_OUTPUT_RETURN(FLB_RETRY);
     }
 
-    flb_plg_info(ctx->ins, "Sent %d events to CloudWatch", event_count);
+    flb_plg_debug(ctx->ins, "Sent %d events to CloudWatch", event_count);
 
     FLB_OUTPUT_RETURN(FLB_OK);
 }

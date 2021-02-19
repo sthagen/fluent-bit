@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,6 +28,7 @@
 #include <fluent-bit/flb_pack.h>
 #include <fluent-bit/flb_sds.h>
 #include <fluent-bit/flb_http_client.h>
+#include <fluent-bit/flb_config_map.h>
 #include <msgpack.h>
 
 #include "websocket.h"
@@ -48,7 +49,7 @@ static int flb_ws_handshake(struct flb_upstream_conn *u_conn,
         flb_error("[output_ws] upstream connection error");
         return -1;
     }
-	
+
     /* Compose HTTP Client request */
     c = flb_http_client(u_conn, FLB_HTTP_GET, ctx->uri,
                         NULL, 0, NULL, 0, NULL, 0);
@@ -62,10 +63,10 @@ static int flb_ws_handshake(struct flb_upstream_conn *u_conn,
     flb_http_add_header(c, "Connection", 10, "Upgrade", 7);
     flb_http_add_header(c, "Sec-WebSocket-Key", 17, "dGhlIHNhbXBsZSBub25jZQ==", 24);
     flb_http_add_header(c, "Sec-WebSocket-Version", 21, "13", 2);
-	
+
     /* Perform request*/
     ret = flb_http_do(c, &bytes_sent);
-	
+
     if (ret != 0 || c->resp.status != 101) {
         if (c->resp.payload_size > 0) {
             flb_debug("[output_ws] Websocket Server Response\n%s",
@@ -88,17 +89,17 @@ static void flb_ws_mask(char *data, int len, char *mask)
     }
 }
 
-static int flb_ws_sendDataFrameHeader(struct flb_upstream_conn *u_conn, 
+static int flb_ws_sendDataFrameHeader(struct flb_upstream_conn *u_conn,
                                       struct flb_out_ws *ctx, const void *data, size_t bytes)
-{		
-    int ret = -1;	
+{
+    int ret = -1;
     char* data_frame_head;
     size_t bytes_sent;
     int data_frame_head_len = 0;
     //TODO use random function to generate masking_key
     char masking_key[4] = {0x12, 0x34, 0x56, 0x78};
     unsigned long long payloadSize = bytes;
-    
+
     flb_ws_mask((char *)data, payloadSize, masking_key);
     if (payloadSize < 126) {
         data_frame_head = (char *)flb_malloc(6);
@@ -162,14 +163,14 @@ static int flb_ws_sendDataFrameHeader(struct flb_upstream_conn *u_conn,
 
 error:
     flb_free(data_frame_head);
-    return -1;	
+    return -1;
 }
 
 static int cb_ws_init(struct flb_output_instance *ins,
                       struct flb_config *config, void *data)
 {
     struct flb_out_ws *ctx = NULL;
-    
+
     ctx = flb_ws_conf_create(ins, config);
     if (!ctx) {
         return -1;
@@ -205,7 +206,7 @@ static void cb_ws_flush(const void *data, size_t bytes,
     /* Get upstream context and connection */
     u = ctx->u;
     u_conn = flb_upstream_conn_get(u);
-    
+
     if (!u_conn) {
         flb_error("[out_ws] no upstream connections available to %s:%i", u->tcp_host, u->tcp_port);
         ctx->handshake = 1;
@@ -214,13 +215,13 @@ static void cb_ws_flush(const void *data, size_t bytes,
 
     now = time(NULL);
 
-    //TODO how to determine the interval? conn disconnet is about 30 sec, so we set 20 ssecnds here. 
+    //TODO how to determine the interval? conn disconnet is about 30 sec, so we set 20 ssecnds here.
     flb_debug("[out_ws] interval is  %ld and handshake is %d", now - ctx->last_input_timestamp, ctx->handshake);
     if ((now - ctx->last_input_timestamp > ctx->idle_interval) && (ctx->handshake == 0)) {
         ctx->handshake = 1;
         flb_upstream_conn_release(u_conn);
         FLB_OUTPUT_RETURN(FLB_RETRY);
-    } 
+    }
     ctx->last_input_timestamp = now;
 
     if (ctx->handshake == 1) {
@@ -240,7 +241,7 @@ static void cb_ws_flush(const void *data, size_t bytes,
                                                ctx->out_format,
                                                ctx->json_date_format,
                                                ctx->json_date_key);
-        
+
         if (!json) {
             flb_error("[out_ws] error formatting JSON payload");
             flb_upstream_conn_release(u_conn);
@@ -255,8 +256,13 @@ static void cb_ws_flush(const void *data, size_t bytes,
     else {
         ret = flb_ws_sendDataFrameHeader(u_conn, ctx, json, flb_sds_len(json));
     }
+
     if (ret == -1) {
         flb_error("[out_ws] dataFrameHeader sent failed");
+        ctx->handshake = 1;
+        if (json) {
+            flb_sds_destroy(json);
+        }
         flb_upstream_conn_release(u_conn);
         FLB_OUTPUT_RETURN(FLB_RETRY);
     }
@@ -272,14 +278,31 @@ static void cb_ws_flush(const void *data, size_t bytes,
 
     //flb_info("[out_ws] sendDataFrame number of bytes sent = %i", ret);
     if (ret == -1) {
+        ctx->handshake = 1;
         flb_upstream_conn_release(u_conn);
         FLB_OUTPUT_RETURN(FLB_RETRY);
     }
-	
+
     /* Release the connection */
     flb_upstream_conn_release(u_conn);
     FLB_OUTPUT_RETURN(FLB_OK);
 }
+
+/* Configuration properties map */
+static struct flb_config_map config_map[] = {
+    {
+     FLB_CONFIG_MAP_STR, "uri", NULL,
+     0, FLB_TRUE, offsetof(struct flb_out_ws, uri),
+     "Specify an optional URI for the target web socket server, e.g: /something"
+    },
+    {
+     FLB_CONFIG_MAP_STR, "format", NULL,
+     0, FLB_FALSE, 0,
+     "Set desired payload format: json, json_stream, json_lines, gelf or msgpack"
+    },
+    /* EOF */
+    {0}
+};
 
 /* Plugin reference */
 struct flb_output_plugin out_websocket_plugin = {
@@ -288,5 +311,6 @@ struct flb_output_plugin out_websocket_plugin = {
     .cb_init      = cb_ws_init,
     .cb_flush     = cb_ws_flush,
     .cb_exit      = cb_ws_exit,
+    .config_map   = config_map,
     .flags        = FLB_OUTPUT_NET | FLB_IO_OPT_TLS,
 };

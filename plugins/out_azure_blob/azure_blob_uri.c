@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -133,7 +133,6 @@ flb_sds_t azb_uri_ensure_or_create_container(struct flb_azure_blob *ctx)
 
 flb_sds_t azb_uri_create_blob(struct flb_azure_blob *ctx, char *tag)
 {
-    char *ext;
     flb_sds_t uri;
 
     uri = azb_uri_container(ctx);

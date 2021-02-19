@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019      The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -171,10 +171,11 @@ struct flb_http_client *flb_aws_client_request(struct flb_aws_client *aws_client
      * per FLB_AWS_CREDENTIAL_REFRESH_LIMIT.
      *
      */
-    if (c && (c->resp.status == 400 || c->resp.status == 403)) {
+    if (c && (c->resp.status >= 400 && c->resp.status < 500)) {
         if (aws_client->has_auth && time(NULL) > aws_client->refresh_limit) {
             if (flb_aws_is_auth_error(c->resp.payload, c->resp.payload_size)
                 == FLB_TRUE) {
+                flb_error("[aws_client] auth error, refreshing creds");
                 aws_client->refresh_limit = time(NULL)
                                             + FLB_AWS_CREDENTIAL_REFRESH_LIMIT;
                 aws_client->provider->provider_vtable->
@@ -236,15 +237,29 @@ int flb_aws_is_auth_error(char *payload, size_t payload_size)
         return FLB_TRUE;
     }
 
+    if (strcasestr(payload, "AccessDenied") != NULL) {
+        return FLB_TRUE;
+    }
+
+    if (strcasestr(payload, "Expired") != NULL) {
+        return FLB_TRUE;
+    }
+
     /* Most APIs we use return JSON */
     error = flb_aws_error(payload, payload_size);
     if (error != NULL) {
         if (strcmp(error, "ExpiredToken") == 0 ||
+            strcmp(error, "ExpiredTokenException") == 0 ||
             strcmp(error, "AccessDeniedException") == 0 ||
+            strcmp(error, "AccessDenied") == 0 ||
             strcmp(error, "IncompleteSignature") == 0 ||
+            strcmp(error, "SignatureDoesNotMatch") == 0 ||
             strcmp(error, "MissingAuthenticationToken") == 0 ||
             strcmp(error, "InvalidClientTokenId") == 0 ||
+            strcmp(error, "InvalidToken") == 0 ||
+            strcmp(error, "InvalidAccessKeyId") == 0 ||
             strcmp(error, "UnrecognizedClientException") == 0) {
+                flb_sds_destroy(error);
             return FLB_TRUE;
         }
         flb_sds_destroy(error);
@@ -544,7 +559,7 @@ flb_sds_t flb_json_get_val(char *response, size_t response_len, char *key)
     if (ret == JSMN_ERROR_INVAL || ret == JSMN_ERROR_PART) {
         flb_free(tokens);
         flb_debug("[aws_client] Unable to parse API response- response is not"
-                  "not valid JSON.");
+                  " valid JSON.");
         return NULL;
     }
 

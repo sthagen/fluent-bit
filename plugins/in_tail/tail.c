@@ -2,7 +2,7 @@
 
 /*  Fluent Bit
  *  ==========
- *  Copyright (C) 2019-2020 The Fluent Bit Authors
+ *  Copyright (C) 2019-2021 The Fluent Bit Authors
  *  Copyright (C) 2015-2018 Treasure Data Inc.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
@@ -532,6 +532,11 @@ static struct flb_config_map config_map[] = {
      FLB_CONFIG_MAP_STR, "path_key", NULL,
      0, FLB_TRUE, offsetof(struct flb_tail_config, path_key),
      "set the 'key' name where the name of monitored file will be appended."
+    },
+    {
+     FLB_CONFIG_MAP_STR, "offset_key", NULL,
+     0, FLB_TRUE, offsetof(struct flb_tail_config, offset_key),
+     "set the 'key' name where the offset of monitored file will be appended."
     },
     {
      FLB_CONFIG_MAP_TIME, "ignore_older", "0",
