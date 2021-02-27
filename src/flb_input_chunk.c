@@ -567,7 +567,7 @@ int flb_input_chunk_destroy(struct flb_input_chunk *ic, int del)
 /* Return or create an available chunk to write data */
 static struct flb_input_chunk *input_chunk_get(const char *tag, int tag_len,
                                                struct flb_input_instance *in,
-                                               size_t chunk_size)
+                                               size_t chunk_size, int *set_down)
 {
     int id;
     int ret;
@@ -585,6 +585,7 @@ static struct flb_input_chunk *input_chunk_get(const char *tag, int tag_len,
             if (ret == -1) {
                 ic = NULL;
             }
+            *set_down = FLB_TRUE;
         }
     }
 
@@ -781,6 +782,8 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     int ret;
     int set_down = FLB_FALSE;
     int min;
+    int meta_size;
+    int new_chunk = FLB_FALSE;
     size_t diff;
     size_t size;
     size_t pre_size;
@@ -813,10 +816,15 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
      * Get a target input chunk, can be one with remaining space available
      * or a new one.
      */
-    ic = input_chunk_get(tag, tag_len, in, buf_size);
+    ic = input_chunk_get(tag, tag_len, in, buf_size, &set_down);
     if (!ic) {
         flb_error("[input chunk] no available chunk");
         return -1;
+    }
+
+    /* newly created chunk */
+    if (flb_input_chunk_get_size(ic) == 0) {
+        new_chunk = FLB_TRUE;
     }
 
     /* We got the chunk, validate if is 'up' or 'down' */
@@ -864,8 +872,35 @@ int flb_input_chunk_append_raw(struct flb_input_instance *in,
     /* calculate the 'real' new bytes being added after the filtering phase */
     diff = llabs(size - pre_size);
 
-    /* Update output instance bytes counters */
-    flb_input_chunk_update_output_instances(ic, diff);
+    /*
+     * Update output instance bytes counters, note that bytes counter should
+     * always count the chunk size in the file system. Therefore, it should
+     * add the extra bytes for the metadata.
+     */
+    meta_size = cio_meta_size(ic->chunk);
+    if (new_chunk == FLB_TRUE) {
+        diff += meta_size
+            /* See https://github.com/edsiper/chunkio#file-layout for more details */
+            + 2    /* HEADER BYTES */
+            + 4    /* CRC32 */
+            + 16   /* PADDING */
+            + 2;   /* METADATA LENGTH BYTES */
+    }
+
+    /* 
+     * There is a case that rewrite_tag will modify the tag and keep rule is set
+     * to drop the original record. The original record will still go through the
+     * flb_input_chunk_update_output_instances(2) to update the fs_chunk_size by
+     * metadata bytes (consisted by metadata bytes of the file chunk). This condition
+     * sets the diff to 0 in order to not update the fs_chunk_size. 
+     */
+    if (flb_input_chunk_get_size(ic) == 0) {
+        diff = 0;
+    }
+
+    if (diff != 0) {
+        flb_input_chunk_update_output_instances(ic, diff);
+    }
 
     /* Lock buffers where size > 2MB */
     if (size > FLB_INPUT_CHUNK_FS_MAX_SIZE) {
