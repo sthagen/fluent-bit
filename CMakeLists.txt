@@ -188,6 +188,9 @@ option(FLB_FILTER_GEOIP2      "Enable geoip2 filter"                Yes)
 # Debug callbacks
 option(FLB_HTTP_CLIENT_DEBUG  "Enable HTTP Client debug callbacks"   No)
 
+# Run ldconfig on package post-install
+option(FLB_RUN_LDCONFIG "Enable execution of ldconfig after installation" Yes)
+
 # Enable all features
 if(FLB_ALL)
   # Global
@@ -422,6 +425,12 @@ if(FLB_TLS)
   option(INSTALL_MBEDTLS_HEADERS OFF)
   add_subdirectory(${FLB_PATH_LIB_MBEDTLS} EXCLUDE_FROM_ALL)
 
+  # Link OpenSSL statically on Windows.
+  if (FLB_SYSTEM_WINDOWS)
+    set(OPENSSL_USE_STATIC_LIBS ON)
+    set(OPENSSL_MSVC_STATIC_RT  ON)
+  endif()
+
   # find OpenSSL (our preferred choice now)
   find_package(OpenSSL)
   if(OPENSSL_FOUND)
@@ -585,7 +594,6 @@ if(FLB_TD)
   FLB_OPTION(FLB_JEMALLOC ON)
   set(FLB_PROG_NAME "TD Agent Bit")
   set(FLB_OUT_NAME "td-agent-bit")
-  set(WITHOUT_HEADERS On)
 else()
   set(FLB_PROG_NAME "Fluent Bit")
   set(FLB_OUT_NAME "fluent-bit")
@@ -610,9 +618,9 @@ if(FLB_JEMALLOC AND ${CMAKE_SYSTEM_NAME} MATCHES "Linux")
   # Link to Jemalloc as an external dependency
   ExternalProject_Add(jemalloc
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/lib/jemalloc-5.2.1
-    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/lib/jemalloc-5.2.1/configure ${AUTOCONF_HOST_OPT} --with-lg-quantum=3 --prefix=<INSTALL_DIR>
+    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/lib/jemalloc-5.2.1/configure ${AUTOCONF_HOST_OPT} --host=${HOST} --with-lg-quantum=3 --prefix=<INSTALL_DIR>
     CFLAGS=-std=gnu99\ -Wall\ -pipe\ -g3\ -O3\ -funroll-loops
-    BUILD_COMMAND $(MAKE)
+    BUILD_COMMAND $(MAKE) CC=${CMAKE_C_COMPILER}
     INSTALL_DIR ${CMAKE_CURRENT_BINARY_DIR}/
     INSTALL_COMMAND $(MAKE) install_lib_static install_include)
   add_library(libjemalloc STATIC IMPORTED GLOBAL)
@@ -629,8 +637,8 @@ if(FLB_BACKTRACE)
   FLB_DEFINITION(FLB_HAVE_LIBBACKTRACE)
   ExternalProject_Add(backtrace
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/lib/libbacktrace-ca0de05/
-    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/lib/libbacktrace-ca0de05/configure ${AUTOCONF_HOST_OPT} --prefix=<INSTALL_DIR> --enable-shared=no --enable-static=yes
-    BUILD_COMMAND $(MAKE)
+    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/lib/libbacktrace-ca0de05/configure ${AUTOCONF_HOST_OPT} --host=${HOST} --prefix=<INSTALL_DIR> --enable-shared=no --enable-static=yes
+    BUILD_COMMAND $(MAKE) CC=${CMAKE_C_COMPILER}
     INSTALL_COMMAND $(MAKE) DESTDIR= install
     )
   add_library(libbacktrace STATIC IMPORTED GLOBAL)
@@ -734,9 +742,9 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
   set(FLB_INSTALL_INCLUDEDIR "include")
 else()
   set(FLB_INSTALL_BINDIR ${CMAKE_INSTALL_FULL_BINDIR})
-  set(FLB_INSTALL_LIBDIR "${CMAKE_INSTALL_LIBDIR}/${FLB_OUT_NAME}")
+  set(FLB_INSTALL_LIBDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
   set(FLB_INSTALL_CONFDIR "${CMAKE_INSTALL_SYSCONFDIR}/${FLB_OUT_NAME}/")
-  set(FLB_INSTALL_INCLUDEDIR ${CMAKE_INSTALL_INCLUDEDIR})
+  set(FLB_INSTALL_INCLUDEDIR "${CMAKE_INSTALL_PREFIX}/include")
 endif()
 
 # Instruct CMake to build the Fluent Bit Core
@@ -786,8 +794,18 @@ if(FLB_SYSTEM_WINDOWS)
   endif()
 endif()
 
+# Enable components
+set(CPACK_DEB_COMPONENT_INSTALL ON)
+set(CPACK_RPM_COMPONENT_INSTALL ON)
+set(CPACK_COMPONENTS_ALL ${CPACK_COMPONENTS_ALL} binary library headers)
+set(CPACK_COMPONENTS_GROUPING "ONE_PER_GROUP")
+
+set(CPACK_COMPONENT_BINARY_GROUP "RUNTIME")
+set(CPACK_COMPONENT_LIBRARY_GROUP "RUNTIME")
+
 # Debian package setup and name sanitizer
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+
 find_program(DPKG_PROGRAM dpkg DOC "dpkg program of Debian-based systems")
 if(DPKG_PROGRAM)
   execute_process(
@@ -795,14 +813,28 @@ if(DPKG_PROGRAM)
     OUTPUT_VARIABLE CPACK_DEBIAN_PACKAGE_ARCHITECTURE
     OUTPUT_STRIP_TRAILING_WHITESPACE
     )
-  #set(CPACK_PACKAGE_FILE_NAME
-  #  "${CPACK_PACKAGE_NAME_LOWERCASE}_${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}_${CPACK_DEBIAN_PACKAGE_ARCHITECTURE}")
 
-  set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}_${CPACK_PACKAGE_VERSION}_${CPACK_DEBIAN_PACKAGE_ARCHITECTURE}")
-
-  set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+  set(CPACK_DEBIAN_HEADERS_FILE_NAME "${CPACK_PACKAGE_NAME}_${CPACK_PACKAGE_VERSION}_${CPACK_DEBIAN_PACKAGE_ARCHITECTURE}-headers.deb")
+  set(CPACK_DEBIAN_RUNTIME_PACKAGE_NAME "${CPACK_PACKAGE_NAME}")
+  set(CPACK_DEBIAN_RUNTIME_FILE_NAME "${CPACK_PACKAGE_NAME}_${CPACK_PACKAGE_VERSION}_${CPACK_DEBIAN_PACKAGE_ARCHITECTURE}.deb")
+  set(CPACK_DEBIAN_RUNTIME_PACKAGE_CONTROL_EXTRA
     ${CMAKE_CURRENT_SOURCE_DIR}/debian/conffiles
     )
+
+  if(FLB_RUN_LDCONFIG)
+    set(LDCONFIG_DIR ${FLB_INSTALL_LIBDIR})
+    file(WRITE ${PROJECT_BINARY_DIR}/scripts/postinst "
+mkdir -p /etc/ld.so.conf.d
+echo \"${LDCONFIG_DIR}\" > /etc/ld.so.conf.d/libfluent-bit.conf
+ldconfig
+    ")
+    file(WRITE ${PROJECT_BINARY_DIR}/scripts/prerm "
+rm -f -- /etc/ld.so.conf.d/libfluent-bit.conf
+ldconfig
+    ")
+    set(CPACK_DEBIAN_RUNTIME_PACKAGE_CONTROL_EXTRA "${PROJECT_BINARY_DIR}/scripts/postinst;${PROJECT_BINARY_DIR}/scripts/prerm")
+  endif(FLB_RUN_LDCONFIG)
+
 endif()
 
 # RPM Generation information
@@ -825,10 +857,11 @@ set(CPACK_RPM_USER_FILELIST
   "%ignore /usr/local/bin"
   "%ignore /opt"
   "%ignore /etc")
+
 set(CPACK_RPM_PACKAGE_AUTOREQ ON)
-if(CPACK_GENERATOR MATCHES "RPM")
-  set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CPACK_PACKAGE_RELEASE}.${CMAKE_SYSTEM_PROCESSOR}")
-endif()
+set(CPACK_RPM_RUNTIME_PACKAGE_NAME "${CPACK_PACKAGE_NAME}")
+set(CPACK_RPM_HEADERS_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CPACK_PACKAGE_RELEASE}.${CMAKE_SYSTEM_PROCESSOR}-headers.rpm")
+set(CPACK_RPM_RUNTIME_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CPACK_PACKAGE_RELEASE}.${CMAKE_SYSTEM_PROCESSOR}.rpm")
 
 # CPack: DEB
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)

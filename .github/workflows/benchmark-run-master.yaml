@@ -1,82 +1,13 @@
-name: Run integration tests for PR
+name: Run benchmark tests for master
 on:
-  pull_request_target:
-    branches:
-      - master
+  workflow_run:
+    workflows: [ 'Run integration tests for master' ]
     types:
-      - labeled
-      - opened
-      - edited
-      - reopened
-      - synchronize
+      - completed
 jobs:
-  publish-docker-images:
-    name: publish the docker images for PR
-    if: contains(github.event.pull_request.labels.*.name, 'ok-to-test')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Wait for docker build to succeed
-        uses: fountainhead/action-wait-for-check@v1.0.0
-        id: wait-for-build
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          checkName: docker_build
-          timeoutSeconds: 3600
-          intervalSeconds: 10
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Wait until artifacts are propagated
-        uses: jakejarvis/wait-action@master
-        with:
-          time: '15s'
-
-      - name: Download docker image from build artifacts
-        uses: dawidd6/action-download-artifact@v2
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          workflow: integration-build-pr.yaml
-          pr: ${{ github.event.pull_request.number }}
-          repo: ${{ github.repository }}
-          name: action_image_artifact_${{ env.dockerhub_organization }}_fluent-bit_${{ env.arch }}-master-pr-${{ env.pr }}
-          path: images
-        env:
-          pr: ${{github.event.pull_request.number}}
-          arch: x86_64
-          dockerhub_organization: fluentbitdev
-
-      - name: Import docker image
-        run: |
-          docker load --input ./images/${{ env.dockerhub_organization }}_fluent-bit_${{ env.arch }}-master-pr-${{ env.pr }}
-        env:
-          pr: ${{github.event.pull_request.number}}
-          arch: x86_64
-          dockerhub_organization: fluentbitdev
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v1
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Push image to Docker Hub
-        run: |
-          docker push ${{ env.dockerhub_organization }}/fluent-bit:${{ env.arch }}-master-pr-${{ env.pr }}
-        env:
-          pr: ${{ github.event.number }}
-          arch: x86_64
-          dockerhub_organization: fluentbitdev
-
-      - uses: actions-ecosystem/action-add-labels@v1
-        name: Label the PR
-        with:
-          labels: ci/integration-docker-ok
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          number: ${{ github.event.pull_request.number }}
-          repo: fluent/fluent-bit
-
-  run-integration-gcp:
-    name: run-integration on GCP - k8s ${{ matrix.k8s-release }}
-    needs: publish-docker-images
+  run-benchmark-gcp:
+    name: run-benchmark on GCP - k8s ${{ matrix.k8s-release }}
+    if: github.event.workflow_run.conclusion == 'success'
     strategy:
       max-parallel: 3
       fail-fast: false
@@ -178,18 +109,10 @@ jobs:
       - run: go mod download
         working-directory: ci/integration/
 
-      - run: make integration
+      - run: make benchmark
         env:
           IMAGE_REPOSITORY: fluentbitdev/fluent-bit
-          IMAGE_TAG: x86_64-master-pr-${{ github.event.pull_request.number }}
+          IMAGE_TAG: x86_64-master
           GRAFANA_USERNAME: ${{ secrets.GRAFANA_USERNAME }}
           GRAFANA_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}
         working-directory: ci/
-
-      - uses: actions-ecosystem/action-add-labels@v1
-        name: Label the PR
-        with:
-          labels: ci/integration-test-gcp-ok
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          number: ${{ github.event.pull_request.number }}
-          repo: fluent/fluent-bit

@@ -10,7 +10,7 @@
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 {
-    char *outbuf;
+    char *outbuf = NULL;
     size_t outsize;
     int type;
     int len;
@@ -33,13 +33,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         flb_free(json_raw);
         return 0;
     }
+    flb_free(json_raw);
 
     char *null_terminated = get_null_terminated(size, &data, &size);
 
     char *ra_str = flb_sds_create(null_terminated);
     ra = flb_ra_create(ra_str, FLB_FALSE);
     if (!ra) {
+        flb_sds_destroy(ra_str);
         flb_free(null_terminated);
+        flb_free(outbuf);
         return 0;
     }
 
@@ -57,10 +60,14 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
         /* General cleanup */
         flb_free(null_terminated);
-		flb_free(json_raw);
+        flb_free(outbuf);
         return 0;
     }
     flb_ra_dump(ra);
+
+    if (outbuf != NULL) {
+        flb_free(outbuf);
+    }
 
     flb_sds_destroy(str);
     flb_ra_destroy(ra);
@@ -68,6 +75,5 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
     /* General cleanup */
     flb_free(null_terminated);
-    flb_free(json_raw);
     return 0;
 }
