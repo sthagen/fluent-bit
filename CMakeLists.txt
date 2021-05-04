@@ -166,6 +166,7 @@ option(FLB_OUT_KAFKA_REST     "Enable Kafka Rest output plugin"     Yes)
 option(FLB_OUT_CLOUDWATCH_LOGS "Enable AWS CloudWatch output plugin" Yes)
 option(FLB_OUT_KINESIS_FIREHOSE "Enable AWS Firehose output plugin" Yes)
 option(FLB_OUT_KINESIS_STREAMS "Enable AWS Kinesis output plugin" Yes)
+option(FLB_OUT_PROMETHEUS_EXPORTER "Enable Prometheus exporter plugin" Yes)
 option(FLB_OUT_S3             "Enable AWS S3 output plugin"         Yes)
 option(FLB_OUT_WEBSOCKET      "Enable Websocket output plugin"      Yes)
 option(FLB_FILTER_ALTER_SIZE  "Enable alter_size filter"            Yes)
@@ -387,6 +388,9 @@ FLB_OPTION(BUILD_SHARED_LIBS "Build shared libs" OFF)
 set(XXHASH_BUILD_ENABLE_INLINE_API OFF)
 set(XXHASH_BUILD_XXHSUM OFF)
 add_subdirectory(${FLB_PATH_LIB_XXHASH}/cmake_unofficial EXCLUDE_FROM_ALL)
+
+# CMetrics
+add_subdirectory(${FLB_PATH_LIB_CMETRICS} EXCLUDE_FROM_ALL)
 
 # Chunk I/O
 FLB_OPTION(CIO_LIB_STATIC  ON)
