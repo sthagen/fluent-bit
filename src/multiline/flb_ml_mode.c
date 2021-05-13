@@ -18,53 +18,30 @@
  *  limitations under the License.
  */
 
-#ifndef FLB_STR_H
-#define FLB_STR_H
-
 #include <fluent-bit/flb_info.h>
-#include <fluent-bit/flb_macros.h>
-#include <fluent-bit/flb_mem.h>
+#include <fluent-bit/flb_log.h>
+#include <fluent-bit/multiline/flb_ml.h>
+#include <fluent-bit/multiline/flb_ml_mode.h>
 
-#include <stdlib.h>
-#include <string.h>
-
-static inline char *flb_strdup(const char *s)
+struct flb_ml *flb_ml_mode_create(struct flb_config *config, char *mode, int flush_ms,
+                                  char *key)
 {
-    int len;
-    char *str;
-
-    len = strlen(s);
-    str = (char *) flb_malloc(len + 1);
-    if (!str) {
-        return NULL;
+    if (strcmp(mode, "docker") == 0) {
+        return flb_ml_mode_docker(config, flush_ms);
     }
-    memcpy(str, s, len);
-    str[len] = '\0';
-
-    return str;
-}
-
-static inline char *flb_strndup(const char *s, size_t n)
-{
-    char *str;
-
-    str = (char *) flb_malloc(n + 1);
-    if (!str) {
-        return NULL;
+    else if (strcmp(mode, "cri") == 0) {
+        return flb_ml_mode_cri(config, flush_ms);
     }
-    memcpy(str, s, n);
-    str[n] = '\0';
-
-    return str;
-}
-
-/* emptyval checks whether a string has a non-null value "". */
-static inline int flb_str_emptyval(const char *s)
-{
-    if (s != NULL && strcmp(s, "") == 0) {
-        return FLB_TRUE;
+    else if (strcmp(mode, "python") == 0) {
+        return flb_ml_mode_python(config, flush_ms, key);
     }
-    return FLB_FALSE;
-}
+    else if (strcmp(mode, "java") == 0) {
+        return flb_ml_mode_java(config, flush_ms, key);
+    }
+    else if (strcmp(mode, "go") == 0) {
+        return flb_ml_mode_go(config, flush_ms, key);
+    }
 
-#endif
+    flb_error("[multiline] built-in mode '%s' not found", mode);
+    return NULL;
+}

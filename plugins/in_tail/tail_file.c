@@ -65,7 +65,8 @@ static int unpack_and_pack(msgpack_packer *pck, msgpack_object *root,
     if (val != NULL) {
         msgpack_pack_str(pck, val_len);
         msgpack_pack_str_body(pck, val, val_len);
-    } else {
+    }
+    else {
         msgpack_pack_uint64(pck, val_uint64);
     }
 
@@ -201,6 +202,7 @@ int flb_tail_file_pack_line(msgpack_sbuffer *mp_sbuf, msgpack_packer *mp_pck,
 static int process_content(struct flb_tail_file *file, size_t *bytes)
 {
     size_t len;
+    int has_data = FLB_FALSE;
     int lines = 0;
     int ret;
     size_t processed_bytes = 0;
@@ -231,9 +233,15 @@ static int process_content(struct flb_tail_file *file, size_t *bytes)
     /* Parse the data content */
     data = file->buf_data;
     end = data + file->buf_len;
-    while ((p = memchr(data, '\n', end - data))) {
-        len = (p - data);
 
+    /* Skip null characters from the head (sometimes introduced by copy-truncate log rotation) */
+    while (data < end && *data == '\0') {
+        ++data;
+    }
+
+    while (data < end && (p = memchr(data, '\n', end - data))) {
+        has_data = FLB_TRUE;
+        len = (p - data);
         if (file->skip_next == FLB_TRUE) {
             data += len + 1;
             processed_bytes += len;
@@ -352,14 +360,19 @@ static int process_content(struct flb_tail_file *file, size_t *bytes)
         lines++;
     }
     file->parsed = file->buf_len;
-    *bytes = processed_bytes;
 
-    /* Append buffer content to a chunk */
-    flb_input_chunk_append_raw(ctx->ins,
-                               file->tag_buf,
-                               file->tag_len,
-                               out_sbuf->data,
-                               out_sbuf->size);
+    if (has_data) {
+        /* Append buffer content to a chunk */
+        *bytes = processed_bytes;
+        flb_input_chunk_append_raw(ctx->ins,
+                                   file->tag_buf,
+                                   file->tag_len,
+                                   out_sbuf->data,
+                                   out_sbuf->size);
+    }
+    else {
+        *bytes = file->buf_len;
+    }
 
     msgpack_sbuffer_destroy(out_sbuf);
     return lines;
@@ -751,7 +764,7 @@ int flb_tail_file_append(char *path, struct stat *st, int mode,
         mk_list_add(&file->_head, &ctx->files_event);
 
         /* Register this file into the fs_event monitoring */
-        ret = flb_tail_fs_add(file);
+        ret = flb_tail_fs_add(ctx, file);
         if (ret == -1) {
             flb_plg_error(ctx->ins, "could not register file into fs_events");
             goto error;
@@ -817,7 +830,7 @@ void flb_tail_file_remove(struct flb_tail_file *file)
     flb_sds_destroy(file->dmode_buf);
     flb_sds_destroy(file->dmode_lastline);
     mk_list_del(&file->_head);
-    flb_tail_fs_remove(file);
+    flb_tail_fs_remove(ctx, file);
     /* avoid deleting file with -1 fd */
     if (file->fd != -1) {
         close(file->fd);
@@ -1133,7 +1146,7 @@ int flb_tail_file_to_event(struct flb_tail_file *file)
     }
 
     /* Notify the fs-event handler that we will start monitoring this 'file' */
-    ret = flb_tail_fs_add(file);
+    ret = flb_tail_fs_add(ctx, file);
     if (ret == -1) {
         return -1;
     }

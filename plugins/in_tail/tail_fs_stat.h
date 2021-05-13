@@ -18,38 +18,21 @@
  *  limitations under the License.
  */
 
-#ifndef FLB_IN_DE_H
-#define FLB_IN_DE_H
+#ifndef FLB_TAIL_FS_STAT_H
+#define FLB_TAIL_FS_STAT_H
 
-#include <msgpack.h>
+#include <fluent-bit/flb_info.h>
 #include <fluent-bit/flb_input.h>
-#include <fluent-bit/flb_parser.h>
 
-#define DEFAULT_BUF_SIZE            8192
-#define MIN_BUF_SIZE                2048
-#define DEFAULT_FIELD_NAME          "message"
-#define DEFAULT_UNIX_SOCKET_PATH    "/var/run/docker.sock"
+#include "tail_config.h"
+#include "tail_file_internal.h"
 
-struct flb_in_de_config
-{
-    int fd;                         /* File descriptor */
-    int coll_id;                    /* collector id */
-    flb_sds_t unix_path;            /* Unix path for socket */
-    char *buf;
-    size_t buf_size;
-    flb_sds_t key;
-
-    /* retries */
-    int reconnect_retry_limits;
-    int reconnect_retry_interval;
-
-    /* retries (internal) */
-    int current_retries;
-    int retry_coll_id;
-
-    struct flb_parser *parser;
-    struct flb_input_instance *ins; /* Input plugin instace */
-
-};
+int flb_tail_fs_stat_init(struct flb_input_instance *in,
+                          struct flb_tail_config *ctx, struct flb_config *config);
+int flb_tail_fs_stat_add(struct flb_tail_file *file);
+int flb_tail_fs_stat_remove(struct flb_tail_file *file);
+int flb_tail_fs_stat_exit(struct flb_tail_config *ctx);
+void flb_tail_fs_stat_pause(struct flb_tail_config *ctx);
+void flb_tail_fs_stat_resume(struct flb_tail_config *ctx);
 
 #endif
