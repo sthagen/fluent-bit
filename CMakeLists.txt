@@ -128,6 +128,7 @@ option(FLB_IN_SYSTEMD         "Enable Systemd input plugin"         Yes)
 option(FLB_IN_DUMMY           "Enable Dummy input plugin"           Yes)
 option(FLB_IN_NETIF           "Enable NetworkIF input plugin"       Yes)
 option(FLB_IN_WINLOG          "Enable Windows Log input plugin"      No)
+option(FLB_IN_WINSTAT         "Enable Windows Stat input plugin"     No)
 option(FLB_IN_COLLECTD        "Enable Collectd input plugin"        Yes)
 option(FLB_IN_STATSD          "Enable StatsD input plugin"          Yes)
 option(FLB_IN_STORAGE_BACKLOG "Enable storage backlog input plugin" Yes)
@@ -391,6 +392,14 @@ add_subdirectory(${FLB_PATH_LIB_XXHASH}/cmake_unofficial EXCLUDE_FROM_ALL)
 
 # CMetrics
 add_subdirectory(${FLB_PATH_LIB_CMETRICS} EXCLUDE_FROM_ALL)
+
+# C-Ares (DNS library)
+FLB_OPTION(CARES_STATIC      ON)
+FLB_OPTION(CARES_SHARED      OFF)
+FLB_OPTION(CARES_INSTALL     OFF)
+FLB_OPTION(CARES_BUILD_TESTS OFF)
+FLB_OPTION(CARES_BUILD_TOOLS OFF)
+add_subdirectory(${FLB_PATH_LIB_CARES})# EXCLUDE_FROM_ALL)
 
 # Chunk I/O
 FLB_OPTION(CIO_LIB_STATIC  ON)
@@ -749,6 +758,13 @@ else()
   set(FLB_INSTALL_LIBDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
   set(FLB_INSTALL_CONFDIR "${CMAKE_INSTALL_SYSCONFDIR}/${FLB_OUT_NAME}/")
   set(FLB_INSTALL_INCLUDEDIR "${CMAKE_INSTALL_PREFIX}/include")
+  if(${CMAKE_INSTALL_PREFIX} MATCHES "/usr/local")
+    set(FLB_INSTALL_SYSTEMDUNITDIR "/lib/systemd/system/")
+    set(FLB_INSTALL_UPSTARTUNITDIR "/etc/init")
+  else()
+    set(FLB_INSTALL_SYSTEMDUNITDIR "${CMAKE_INSTALL_PREFIX}/lib/systemd/system/")
+    set(FLB_INSTALL_UPSTARTUNITDIR "${CMAKE_INSTALL_PREFIX}/etc/init")
+  endif()
 endif()
 
 # Instruct CMake to build the Fluent Bit Core

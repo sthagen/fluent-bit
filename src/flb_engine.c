@@ -456,6 +456,9 @@ int flb_engine_start(struct flb_config *config)
     struct mk_event_loop *evl;
     struct flb_sched *sched;
 
+    /* Initialize the networking layer */
+    flb_net_init();
+
     /* Create the event loop and set it in the global configuration */
     evl = mk_event_loop_create(256);
     if (!evl) {
@@ -501,6 +504,18 @@ int flb_engine_start(struct flb_config *config)
         return -1;
     }
 
+    /* Initialize the scheduler */
+    sched = flb_sched_create(config, config->evl);
+    if (!sched) {
+        flb_error("[engine] scheduler could not start");
+        return -1;
+    }
+    config->sched = sched;
+
+    /* Register the scheduler context */
+    flb_sched_ctx_init();
+    flb_sched_ctx_set(sched);
+
     /* Initialize input plugins */
     ret = flb_input_init_all(config);
     if (ret == -1) {
@@ -539,17 +554,6 @@ int flb_engine_start(struct flb_config *config)
         flb_utils_error(FLB_ERR_CFG_FLUSH_CREATE);
     }
 
-    /* Initialize the scheduler */
-    sched = flb_sched_create(config, config->evl);
-    if (!sched) {
-        flb_error("[engine] scheduler could not start");
-        return -1;
-    }
-    config->sched = sched;
-
-    /* Register the scheduler context */
-    flb_sched_ctx_init();
-    flb_sched_ctx_set(sched);
 
 #ifdef FLB_HAVE_METRICS
     if (config->storage_metrics == FLB_TRUE) {

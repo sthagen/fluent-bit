@@ -198,6 +198,7 @@ struct flb_config *flb_config_init()
     mk_list_init(&config->out_plugins);
     mk_list_init(&config->inputs);
     mk_list_init(&config->parsers);
+    mk_list_init(&config->multilines);
     mk_list_init(&config->filters);
     mk_list_init(&config->outputs);
     mk_list_init(&config->proxies);
@@ -415,6 +416,9 @@ static int set_log_level(struct flb_config *config, const char *v_str)
         }
         else if (strcasecmp(v_str, "trace") == 0) {
             config->verbose = 5;
+        }
+        else if (strcasecmp(v_str, "off") == 0) {
+            config->verbose = FLB_LOG_OFF;
         }
         else {
             return -1;

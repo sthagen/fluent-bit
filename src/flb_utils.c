@@ -420,21 +420,22 @@ int64_t flb_utils_size_to_bytes(const char *size)
 
     if (tmp[0] == 'K') {
         /* set upper bound (2**64/KB)/2 to avoid overflows */
-        if (val >= 0x20c49ba5e353f8) {
+        if (val >= 9223372036854775 || val <= -9223372036854774)
+        {
             return -1;
         }
         return (val * KB);
     }
     else if (tmp[0] == 'M') {
         /* set upper bound (2**64/MB)/2 to avoid overflows */
-        if (val >= 0x8637bd05af6) {
+        if (val >= 9223372036854 || val <= -9223372036853) {
             return -1;
         }
         return (val * MB);
     }
     else if (tmp[0] == 'G') {
         /* set upper bound (2**64/GB)/2 to avoid overflows */
-        if (val >= 0x225c17d04) {
+        if (val >= 9223372036 || val <= -9223372035) {
             return -1;
         }
         return (val * GB);
@@ -454,9 +455,10 @@ int64_t flb_utils_hex2int(char *hex, int len)
 
     while ((c = *hex++) && i < len) {
         /* Ensure no overflow */
-        if (res >= 0xccccccccccccd00) {
+        if (res >= (int)((INT64_MAX/0x10) - 0xff)) {
             return -1;
         }
+
         res *= 0x10;
 
         if (c >= 'a' && c <= 'f') {
