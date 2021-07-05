@@ -20,6 +20,7 @@ set(src
   flb_kernel.c
   flb_input.c
   flb_input_chunk.c
+  flb_input_metric.c
   flb_filter.c
   flb_output.c
   flb_output_thread.c
@@ -143,6 +144,13 @@ if(FLB_AWS)
     "aws/flb_aws_credentials_ec2.c"
     "aws/flb_aws_credentials_http.c"
     "aws/flb_aws_credentials_profile.c"
+    )
+endif()
+
+if (FLB_AWS_ERROR_REPORTER)
+  set(src
+    ${src}
+    "aws/flb_aws_error_reporter.c"
     )
 endif()
 
@@ -292,6 +300,7 @@ set(FLB_DEPS
   chunkio-static
   miniz
   xxhash
+  cmetrics-static
   ${FLB_PLUGINS}
   ${FLB_PROXY_PLUGINS}
   ${extra_libs}

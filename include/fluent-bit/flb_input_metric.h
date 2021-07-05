@@ -18,27 +18,15 @@
  *  limitations under the License.
  */
 
-#ifndef FLB_TAIL_WIN32_STAT_H
-#define FLB_TAIL_WIN32_STAT_H
+#ifndef FLB_INPUT_METRIC_H
+#define FLB_INPUT_METRIC_H
 
-struct win32_stat {
-   uint64_t st_ino;
-   uint16_t st_mode;
-   int32_t  st_nlink;
-   int64_t  st_size;
-};
+#include <fluent-bit/flb_info.h>
+#include <cmetrics/cmetrics.h>
+#include <cmetrics/cmt_encode_msgpack.h>
 
-int win32_stat(const char *path, struct win32_stat *wst);
-int win32_lstat(const char *path, struct win32_stat *wst);
-int win32_fstat(const char *path, struct win32_stat *wst);
-
-#define WIN32_S_IFDIR 0x1000
-#define WIN32_S_IFCHR 0x2000
-#define WIN32_S_IFIFO 0x4000
-#define WIN32_S_IFREG 0x8000
-#define WIN32_S_IFLNK 0xc000
-#define WIN32_S_IFMT  0xf000
-
-#define lseek _lseeki64
+int flb_input_metrics_append(struct flb_input_instance *ins,
+                             const char *tag, size_t tag_len,
+                             struct cmt *cmt);
 
 #endif

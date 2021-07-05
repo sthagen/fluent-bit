@@ -93,6 +93,8 @@ option(FLB_STATIC_CONF         "Build binary using static configuration")
 option(FLB_STREAM_PROCESSOR    "Enable Stream Processor"      Yes)
 option(FLB_CORO_STACK_SIZE     "Set coroutine stack size")
 option(FLB_AVRO_ENCODER        "Build with Avro encoding support" No)
+option(FLB_AWS_ERROR_REPORTER  "Build with aws error reporting support" No)
+
 
 # Metrics: Experimental Feature, disabled by default on 0.12 series
 # but enabled in the upcoming 0.13 release. Note that development
@@ -133,6 +135,7 @@ option(FLB_IN_COLLECTD        "Enable Collectd input plugin"        Yes)
 option(FLB_IN_STATSD          "Enable StatsD input plugin"          Yes)
 option(FLB_IN_STORAGE_BACKLOG "Enable storage backlog input plugin" Yes)
 option(FLB_IN_EMITTER         "Enable emitter input plugin"         Yes)
+option(FLB_IN_NODE_EXPORTER_METRICS "Enable node exporter metrics input plugin" Yes)
 option(FLB_OUT_AZURE          "Enable Azure output plugin"          Yes)
 option(FLB_OUT_AZURE_BLOB     "Enable Azure output plugin"          Yes)
 option(FLB_OUT_BIGQUERY       "Enable BigQuery output plugin"       Yes)
@@ -459,6 +462,10 @@ endif()
 # AWS
 if (FLB_AWS)
   FLB_DEFINITION(FLB_HAVE_AWS)
+endif()
+
+if (FLB_AWS_ERROR_REPORTER)
+  FLB_DEFINITION(FLB_HAVE_AWS_ERROR_REPORTER)
 endif()
 
 # Signv4
