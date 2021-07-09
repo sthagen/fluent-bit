@@ -3,7 +3,7 @@ project(fluent-bit)
 
 # Fluent Bit Version
 set(FLB_VERSION_MAJOR  1)
-set(FLB_VERSION_MINOR  8)
+set(FLB_VERSION_MINOR  9)
 set(FLB_VERSION_PATCH  0)
 set(FLB_VERSION_STR "${FLB_VERSION_MAJOR}.${FLB_VERSION_MINOR}.${FLB_VERSION_PATCH}")
 
@@ -88,7 +88,7 @@ option(FLB_BACKTRACE           "Enable stacktrace support"    Yes)
 option(FLB_LUAJIT              "Enable Lua Scripting support" Yes)
 option(FLB_RECORD_ACCESSOR     "Enable record accessor"       Yes)
 option(FLB_SIGNV4              "Enable AWS Signv4 support"    Yes)
-option(FLB_AWS                "Enable AWS support"            Yes)
+option(FLB_AWS                 "Enable AWS support"           Yes)
 option(FLB_STATIC_CONF         "Build binary using static configuration")
 option(FLB_STREAM_PROCESSOR    "Enable Stream Processor"      Yes)
 option(FLB_CORO_STACK_SIZE     "Set coroutine stack size")
@@ -194,7 +194,7 @@ option(FLB_FILTER_GEOIP2      "Enable geoip2 filter"                Yes)
 option(FLB_HTTP_CLIENT_DEBUG  "Enable HTTP Client debug callbacks"   No)
 
 # Run ldconfig on package post-install
-option(FLB_RUN_LDCONFIG "Enable execution of ldconfig after installation" Yes)
+option(FLB_RUN_LDCONFIG "Enable execution of ldconfig after installation" No)
 
 # Enable all features
 if(FLB_ALL)
@@ -462,6 +462,18 @@ endif()
 # AWS
 if (FLB_AWS)
   FLB_DEFINITION(FLB_HAVE_AWS)
+
+  # Support for credential_process in the AWS config file is currently Linux-only.
+  # The current implementation might work for other Unix systems, but would require
+  # further testing to confirm.
+  # Spawning a sub-process in Windows is very different and will require its own
+  # implementation.
+  if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+    FLB_OPTION(FLB_HAVE_AWS_CREDENTIAL_PROCESS ON)
+    FLB_DEFINITION(FLB_HAVE_AWS_CREDENTIAL_PROCESS)
+  else()
+    FLB_OPTION(FLB_HAVE_AWS_CREDENTIAL_PROCESS OFF)
+  endif()
 endif()
 
 if (FLB_AWS_ERROR_REPORTER)
@@ -772,13 +784,6 @@ else()
   set(FLB_INSTALL_LIBDIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
   set(FLB_INSTALL_CONFDIR "${CMAKE_INSTALL_SYSCONFDIR}/${FLB_OUT_NAME}/")
   set(FLB_INSTALL_INCLUDEDIR "${CMAKE_INSTALL_PREFIX}/include")
-  if(${CMAKE_INSTALL_PREFIX} MATCHES "/usr/local")
-    set(FLB_INSTALL_SYSTEMDUNITDIR "/lib/systemd/system/")
-    set(FLB_INSTALL_UPSTARTUNITDIR "/etc/init")
-  else()
-    set(FLB_INSTALL_SYSTEMDUNITDIR "${CMAKE_INSTALL_PREFIX}/lib/systemd/system/")
-    set(FLB_INSTALL_UPSTARTUNITDIR "${CMAKE_INSTALL_PREFIX}/etc/init")
-  endif()
 endif()
 
 # Instruct CMake to build the Fluent Bit Core
